@@ -13,6 +13,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class LLMTranslator:
         timeout: float = 180.0,
         batch_size: int = 20,
         glossary: str = "",
+        fallback: Callable[[list[str]], list[str]] | None = None,
     ) -> None:
         self.base_url = base_url
         self.api_key = api_key
@@ -44,6 +46,7 @@ class LLMTranslator:
         self.timeout = timeout
         self.batch_size = max(1, batch_size)
         self.glossary = glossary.strip()
+        self._fallback = fallback
 
     @property
     def enabled(self) -> bool:
@@ -66,14 +69,25 @@ class LLMTranslator:
         started = time.perf_counter()
         try:
             result = self._request(self._prompt(batch))
-        except RuntimeError:
+        except RuntimeError as exc:
+            text = str(exc)
+            if "429" in text or "rate_limit" in text:
+                # Rate limited: splitting will not help. Use the local model so
+                # the user still gets Vietnamese.
+                logger.warning("LLM rate-limited, falling back to the local translator")
+                return self._fallback_batch(batch)
             if len(batch) > 1:
                 # A long batch can still run out of tokens; split and retry.
                 middle = len(batch) // 2
-                logger.warning("LLM batch @%d failed, splitting %d -> %d+%d", offset, len(batch), middle, len(batch) - middle)
-                return self._translate_batch(batch[:middle], offset) + self._translate_batch(batch[middle:], offset + middle)
-            logger.warning("LLM failed for a single line @%d, keeping source text", offset)
-            return batch
+                logger.warning(
+                    "LLM batch @%d failed, splitting %d -> %d+%d", offset, len(batch), middle, len(batch) - middle
+                )
+                return self._translate_batch(batch[:middle], offset) + self._translate_batch(
+                    batch[middle:], offset + middle
+                )
+            logger.warning("LLM failed for a single line @%d, falling back", offset)
+            return self._fallback_batch(batch)
+
         if len(result) != len(batch):
             logger.warning(
                 "LLM returned %d lines for %d inputs (batch @%d); retrying individually",
@@ -81,10 +95,15 @@ class LLMTranslator:
                 len(batch),
                 offset,
             )
-            result = []
-            for index, text in enumerate(batch):
-                single = self._request(self._prompt([text]))
-                result.append(single[0] if single else text)
+            fixed: list[str] = []
+            for text in batch:
+                try:
+                    single = self._request(self._prompt([text]))
+                    fixed.append(single[0] if single else text)
+                except RuntimeError:
+                    fixed.append(self._fallback_batch([text])[0])
+            result = fixed
+
         logger.info(
             "LLM batch @%d: %d lines in %.0f ms",
             offset,
@@ -92,6 +111,18 @@ class LLMTranslator:
             (time.perf_counter() - started) * 1000,
         )
         return result
+
+    def _fallback_batch(self, batch: list[str]) -> list[str]:
+        if self._fallback is None:
+            return batch
+        try:
+            translated = self._fallback(list(batch))
+            return [
+                translated[i] if i < len(translated) and translated[i] else batch[i] for i in range(len(batch))
+            ]
+        except Exception:  # noqa: BLE001 - never fail the whole transcript
+            logger.exception("fallback translator failed")
+            return batch
 
     def _prompt(self, batch: list[str]) -> str:
         lines = "\n".join(f"{index + 1}. {text}" for index, text in enumerate(batch))
@@ -101,7 +132,19 @@ class LLMTranslator:
             f"Return exactly a JSON array of {len(batch)} strings.\n\n{lines}"
         )
 
-    def _request(self, prompt: str) -> list[str]:
+    def _request(self, prompt: str, attempts: int = 3) -> list[str]:
+        last: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return self._request_once(prompt)
+            except RuntimeError as exc:
+                last = exc
+                logger.warning("LLM attempt %d/%d failed: %s", attempt, attempts, str(exc)[:200])
+                if attempt < attempts:
+                    time.sleep(0.8 * attempt)
+        raise last  # type: ignore[misc]
+
+    def _request_once(self, prompt: str) -> list[str]:
         payload = {
             "model": self.model,
             # Reasoning tokens count against max_tokens: with 4096 a 20-line

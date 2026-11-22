@@ -103,7 +103,7 @@
    *  puts the player near the top of the page, so bottom:88px landed below it. */
   function positionOverlay() {
     if (!els || !host || !host.isConnected) return;
-    const video = document.querySelector("video");
+    const video = videoElement();
     if (!video) return;
     const rect = video.getBoundingClientRect();
     if (rect.width < 200 || rect.height < 100) return;
@@ -246,7 +246,9 @@
   }
 
   function dbg(data) {
-    chrome.runtime.sendMessage({ from: "content", type: "client-debug", data }).catch(() => {});
+    chrome.runtime
+      .sendMessage({ from: "content", type: "client-debug", data: { ...(data || {}), href: location.href } })
+      .catch(() => {});
   }
 
   function transcriptStatus(text, state = "info") {
@@ -438,7 +440,9 @@
   function parseVtt(text) {
     const cues = [];
     const blocks = text.replace(/\r/g, "").split(/\n\s*\n/);
-    const timing = /(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[.,](\d{1,3})/;
+    // Udemy VTT uses MM:SS.mmm (no hours); accept HH:MM:SS too.
+    const timing =
+      /(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*-->\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})/;
     for (const block of blocks) {
       const lines = block.split("\n").filter((line) => line.trim());
       if (!lines.length) continue;
@@ -446,7 +450,8 @@
       if (timingIndex < 0) continue;
       const match = timing.exec(lines[timingIndex]);
       if (!match) continue;
-      const sec = (h, m, s, ms) => Number(h) * 3600 + Number(m) * 60 + Number(s) + Number(ms) / 1000;
+      const sec = (h, m, s, ms) =>
+        (h === undefined ? 0 : Number(h) * 3600) + Number(m) * 60 + Number(s) + Number(ms) / 1000;
       const start = sec(match[1], match[2], match[3], match[4]);
       const end = sec(match[5], match[6], match[7], match[8]);
       const cueText = lines
@@ -464,10 +469,14 @@
     if (!url) return [];
     try {
       const response = await fetch(url, { credentials: "omit" });
+      dbg({ step: "vtt-fetch", ok: response.ok, status: response.status });
       if (!response.ok) return [];
-      return parseVtt(await response.text());
+      const text = await response.text();
+      const cues = parseVtt(text);
+      dbg({ step: "vtt-parsed", bytes: text.length, cues: cues.length, head: text.slice(0, 120) });
+      return cues;
     } catch (error) {
-      console.warn("[speech-trans] VTT fetch failed", error);
+      dbg({ step: "vtt-error", message: String(error) });
       return [];
     }
   }
@@ -524,11 +533,27 @@
     return candidates[0] || null;
   }
 
+  /** The lecture player is the largest visible <video>; Udemy also has hidden
+   *  preview/ad videos at (0,0) that must not be used for positioning. */
   function videoElement() {
-    return document.querySelector("video");
+    const videos = [...document.querySelectorAll("video")];
+    if (!videos.length) return null;
+    let best = null;
+    let bestArea = -1;
+    for (const video of videos) {
+      const rect = video.getBoundingClientRect();
+      const style = getComputedStyle(video);
+      const visible = rect.width > 80 && rect.height > 60 && style.visibility !== "hidden" && style.display !== "none";
+      const area = visible ? rect.width * rect.height : 0;
+      if (area > bestArea) {
+        best = video;
+        bestArea = area;
+      }
+    }
+    return best;
   }
 
-  async function loadTranscript({ allowSeek = false } = {}) {
+  async function loadTranscript({ allowSeek = false, ignoreCache = false } = {}) {
     buildHost(); // make the on-page status + captions visible from the first step
     if (transcript.enabled) {
       transcriptStatus(`Transcript: ${transcript.cues.length} câu`, "info");
@@ -538,7 +563,8 @@
     const key = lessonKey();
     const cacheKey = `tr:${key}`;
     const cached = await chrome.storage.local.get(cacheKey);
-    let cues = (cached && cached[cacheKey] && cached[cacheKey].cues) || [];
+    let cues =
+      (!ignoreCache && cached && cached[cacheKey] && cached[cacheKey].v === 2 && cached[cacheKey].cues) || [];
 
     if (!cues.length) {
       transcriptStatus("Đang tìm transcript trên trang…");
@@ -548,6 +574,7 @@
         probe = await requestProbe();
         raw = await cuesFromVtt(probe);
         if (!raw.length) raw = await cuesFromVttUrl(await vttFromLectureApi(probe));
+        dbg({ step: "vtt", cues: raw.length, hasProbe: Boolean(probe) });
       }
       if (!raw.length) raw = scrapeTranscript();
       if (!raw.length) {
@@ -574,6 +601,7 @@
       }
       if (!raw.length) {
         const video = document.querySelector("video");
+        dbg({ step: "no-cues", tracks: video && video.textTracks ? video.textTracks.length : -1, dom: document.querySelectorAll('[data-purpose="transcript-cue"]').length });
         const tracks = video && video.textTracks ? video.textTracks.length : 0;
         const domCues = document.querySelectorAll('[data-purpose="transcript-cue"]').length;
         const buttons = [...document.querySelectorAll("button, a")].filter((el) =>
@@ -601,12 +629,21 @@
           nextBatch += 1;
           if (index >= batches.length) return;
           const slice = batches[index];
-          const result = await chrome.runtime.sendMessage({
+          let result = await chrome.runtime.sendMessage({
             from: "content",
             type: "translate-cues",
             cues: slice,
             lesson: key,
           });
+          if (!result || result.error) {
+            await new Promise((resolve) => setTimeout(resolve, 1200));
+            result = await chrome.runtime.sendMessage({
+              from: "content",
+              type: "translate-cues",
+              cues: slice,
+              lesson: key,
+            });
+          }
           if (!result || result.error) throw new Error(result ? result.error : "dịch thất bại");
           const got = result.translations || [];
           const offset = index * batchSize;
@@ -616,24 +653,27 @@
           transcriptStatus(`Đang dịch ${Math.min(done, texts.length)}/${texts.length} câu…`);
         }
       };
-      await Promise.all([runBatch(), runBatch(), runBatch()]);
+      await runBatch(); // one batch at a time: the provider rate-limits bursts
       if (translations.some((line) => !line)) {
         throw new Error("Một số câu chưa dịch được — thử lại.");
       }
 
+      dbg({ step: "translated", count: translations.length });
       cues = raw.map((cue, index) => ({
         start: cue.start,
         end: index + 1 < raw.length ? raw[index + 1].start : cue.start + 4,
         en: cue.text,
         vi: translations[index] || "",
       }));
-      await chrome.storage.local.set({ [cacheKey]: { cues, at: Date.now() } });
+      await chrome.storage.local.set({ [cacheKey]: { cues, at: Date.now(), v: 2 } });
+      dbg({ step: "cached", cues: cues.length, first: cues[0] && cues[0].vi });
     }
 
     transcript.cues = cues;
     transcript.index = -1;
     transcript.enabled = true;
     buildHost();
+    dbg({ step: "enable", cues: cues.length, hasEls: Boolean(els) });
     const video = videoElement();
     if (!video) throw new Error("Không tìm thấy video trên trang");
     if (transcript.timer) clearInterval(transcript.timer);
@@ -679,6 +719,11 @@
     if (!transcript.enabled || !els) return;
     const video = videoElement();
     if (!video) return;
+    if (!syncTranscript.logged) {
+      syncTranscript.logged = true;
+      const rect = video.getBoundingClientRect();
+      dbg({ step: "sync", time: video.currentTime, rect: [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)], cues: transcript.cues.length });
+    }
     let index = cueIndexAt(video.currentTime);
     if (index < 0 && transcript.cues.length) index = 0; // before the first cue
     if (index < 0) {
@@ -690,11 +735,29 @@
     // Transcript mode keeps the captions visible while a cue is active: no
     // 25 s auto-hide, and re-show on every tick (video may be paused).
     if (hideTimer) clearTimeout(hideTimer);
+    positionOverlay();
+    startPositionLoop();
     els.wrap.classList.add("show");
     if (index === transcript.index) return;
     transcript.index = index;
     setLine(els.en, cue.en);
     setLine(els.vi, cue.vi);
+    if (!syncTranscript.reported) {
+      syncTranscript.reported = true;
+      setTimeout(() => {
+        const style = getComputedStyle(els.wrap);
+        dbg({
+          step: "overlay",
+          cls: els.wrap.className,
+          opacity: style.opacity,
+          top: els.wrap.style.top,
+          left: els.wrap.style.left,
+          en: els.en.textContent.slice(0, 60),
+          vi: els.vi.textContent.slice(0, 60),
+          connected: host.isConnected,
+        });
+      }, 200);
+    }
   }
 
   function setCaptionsVisible() {
@@ -714,6 +777,7 @@
   // Auto-load the transcript whenever the Udemy transcript panel is open (or
   // opened later): no popup click needed. Cached lessons appear instantly.
   function autoLoadTranscript() {
+    dbg({ step: "auto-load-start", href: location.href });
     let tries = 0;
     const timer = setInterval(async () => {
       tries += 1;
@@ -723,15 +787,20 @@
         return;
       }
       if (!document.querySelector("video")) return;
-      if (tries === 1) {
+      if (!autoLoadTranscript.cacheChecked) {
+        autoLoadTranscript.cacheChecked = true;
         const key = `tr:${lessonKey()}`;
         const cached = await chrome.storage.local.get(key);
         dbg({ step: "cache", key, hit: Boolean(cached && cached[key]), url: location.href });
-        if (cached && cached[key] && cached[key].cues && cached[key].cues.length) {
+        if (cached && cached[key] && cached[key].v === 2 && cached[key].cues && cached[key].cues.length) {
+          const list = cached[key].cues;
+          const englishLike = list.filter((c) => c.vi && c.en && c.vi.trim() === c.en.trim()).length;
+          const badCache = englishLike > Math.max(3, list.length * 0.25);
+          dbg({ step: "cache", hit: true, badCache, englishLike });
           clearInterval(timer);
           if (!transcript.enabled) {
             try {
-              await loadTranscript({ allowSeek: false });
+              await loadTranscript({ allowSeek: false, ignoreCache: badCache });
             } catch (error) {
               transcriptStatus(String(error && error.message ? error.message : error), "error");
             }
@@ -767,6 +836,7 @@
     }, 1000);
   }
 
+  dbg({ step: "content-ready", href: location.href });
   if (document.readyState === "complete") autoLoadTranscript();
   else window.addEventListener("load", autoLoadTranscript);
 

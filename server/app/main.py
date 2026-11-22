@@ -120,6 +120,15 @@ class LocalNetworkCORS:
 
 def _build_services() -> PipelineServices:
     s = get_settings()
+    mt = NLLBTranslator(
+        s.mt_model,
+        device=s.mt_device,
+        dtype=s.mt_dtype,
+        num_beams=s.mt_num_beams,
+        max_input_tokens=s.mt_max_input_tokens,
+        max_new_tokens=s.mt_max_new_tokens,
+        glossary_path=s.glossary_path,
+    )
     return PipelineServices(
         settings=s,
         asr=WhisperASR(
@@ -131,15 +140,7 @@ def _build_services() -> PipelineServices:
             initial_prompt=s.asr_initial_prompt,
             cpu_threads=s.asr_cpu_threads,
         ),
-        mt=NLLBTranslator(
-            s.mt_model,
-            device=s.mt_device,
-            dtype=s.mt_dtype,
-            num_beams=s.mt_num_beams,
-            max_input_tokens=s.mt_max_input_tokens,
-            max_new_tokens=s.mt_max_new_tokens,
-            glossary_path=s.glossary_path,
-        ),
+        mt=mt,
         llm=LLMTranslator(
             base_url=s.llm_base_url,
             api_key=s.llm_api_key,
@@ -148,6 +149,7 @@ def _build_services() -> PipelineServices:
             timeout=s.llm_timeout,
             batch_size=s.llm_batch,
             glossary=_glossary_hint(s),
+            fallback=mt.translate_many,
         ),
     )
 
