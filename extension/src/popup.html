@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>SpeechTrans</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0f16;
+        --panel: #141a24;
+        --line: #232c3a;
+        --text: #e8edf5;
+        --muted: #8b9ab0;
+        --accent: #2563eb;
+        --accent-hover: #3b82f6;
+        --danger: #ef4444;
+        --ok: #22c55e;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        width: 330px;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.45 "Inter", "Roboto", system-ui, -apple-system, sans-serif;
+      }
+      header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 14px 16px 10px;
+      }
+      .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: .2px; }
+      .logo {
+        width: 22px; height: 22px; border-radius: 7px;
+        background: linear-gradient(135deg, #2563eb, #7c3aed);
+        display: grid; place-items: center; font-size: 12px; font-weight: 700;
+      }
+      .tag { font-size: 11px; color: var(--muted); }
+      .server {
+        margin: 0 16px; padding: 10px 12px; border: 1px solid var(--line);
+        border-radius: 10px; background: var(--panel);
+        display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted);
+      }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; flex: none; }
+      .dot.ok { background: var(--ok); }
+      .dot.err { background: var(--danger); }
+      .server strong { color: var(--text); font-weight: 600; }
+      .server .sep { opacity: .35; }
+      main { padding: 12px 16px 6px; display: grid; gap: 10px; }
+      .btn {
+        width: 100%; border: 0; border-radius: 10px; padding: 11px 14px;
+        font: inherit; font-weight: 650; cursor: pointer; color: #fff;
+        background: var(--accent); transition: background .15s ease, opacity .15s;
+      }
+      .btn:hover { background: var(--accent-hover); }
+      .btn.stop { background: #3a1d24; color: #ffb4bd; border: 1px solid #5a2a33; }
+      .btn.stop:hover { background: #4a232c; }
+      .btn:disabled { opacity: .55; cursor: default; }
+      .row {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 12px; padding: 9px 12px; border: 1px solid var(--line);
+        border-radius: 10px; background: var(--panel);
+      }
+      .row .label { display: grid; gap: 1px; }
+      .row .label span:first-child { font-weight: 550; }
+      .row .label span:last-child { font-size: 11px; color: var(--muted); }
+      select {
+        background: #0f141c; color: var(--text); border: 1px solid var(--line);
+        border-radius: 8px; padding: 6px 8px; font: inherit; max-width: 150px;
+      }
+      .switch { position: relative; width: 38px; height: 22px; flex: none; }
+      .switch input { opacity: 0; width: 0; height: 0; }
+      .slider {
+        position: absolute; inset: 0; background: #2a3342; border-radius: 999px;
+        cursor: pointer; transition: background .15s;
+      }
+      .slider::before {
+        content: ""; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px;
+        background: #cfd8e6; border-radius: 50%; transition: transform .15s;
+      }
+      .switch input:checked + .slider { background: var(--accent); }
+      .switch input:checked + .slider::before { transform: translateX(16px); background: #fff; }
+      .switch input:disabled + .slider { opacity: .45; cursor: not-allowed; }
+      .hint { padding: 4px 16px 14px; font-size: 11px; color: var(--muted); }
+      .hint.error { color: #ff9aa5; }
+      .capture {
+        margin-top: -2px; padding: 8px 12px; border-radius: 9px;
+        background: #101620; border: 1px solid var(--line);
+        font-size: 11.5px; color: var(--muted);
+        display: flex; align-items: center; gap: 8px;
+        word-break: break-word;
+      }
+      .capture.err { color: #ff9aa5; border-color: #5a2a33; background: #1d1218; }
+      .capture.ok { color: #b7f3c9; border-color: #1f4a32; background: #0f1a14; }
+      .mini {
+        all: unset; cursor: pointer; font-size: 11.5px; color: #cbd5e1;
+        padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px;
+        background: #0f141c; flex: none;
+      }
+      .mini:hover { background: #1b2431; color: #fff; }
+      .log { margin: 4px 16px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+      .log summary { cursor: pointer; padding: 8px 12px; font-size: 11.5px; color: var(--muted); }
+      .log summary:hover { color: var(--text); }
+      .logbar { display: flex; gap: 8px; padding: 0 10px 8px; }
+      .logbar button {
+        all: unset; cursor: pointer; font-size: 11px; color: #cbd5e1;
+        padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px;
+        background: #0f141c;
+      }
+      .logbar button:hover { background: #1b2431; color: #fff; }
+      #logText {
+        margin: 0; padding: 0 10px 10px; max-height: 240px; overflow: auto;
+        font: 10.5px/1.45 "JetBrains Mono", ui-monospace, monospace;
+        color: #b7c4d6; white-space: pre-wrap; word-break: break-word;
+      }
+      #logText .err { color: #ff9aa5; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand"><span class="logo">ST</span> SpeechTrans</div>
+      <span class="tag">Udemy → VI</span>
+    </header>
+
+    <div class="server" id="server">
+      <span class="dot" id="serverDot"></span>
+      <span id="serverText">Đang kiểm tra server…</span>
+    </div>
+
+    <main>
+      <button class="btn" id="toggleBtn" disabled>Bắt đầu</button>
+      <div class="capture" id="captureStatus">Chưa bắt đầu</div>
+
+      <div class="row">
+        <div class="label">
+          <span>Phụ đề</span>
+          <span>EN + VI trên video</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="captionsToggle" checked />
+          <span class="slider"></span>
+        </label>
+      </div>
+    </main>
+
+    <div class="row">
+      <div class="label">
+        <span>Phụ đề từ transcript</span>
+        <span id="transcriptStatus">Chưa nạp — mở tab Transcript của bài giảng</span>
+      </div>
+      <button type="button" class="mini" id="loadTranscript">Nạp</button>
+      <button type="button" class="mini" id="clearTranscript">Tắt</button>
+    </div>
+
+    <div class="row">
+      <div class="label">
+        <span>Bảng câu &amp; độ trễ</span>
+        <span id="lastUtterance">Chưa có câu nào</span>
+      </div>
+      <button type="button" class="mini" id="openTranscript">Mở</button>
+    </div>
+
+    <details class="log" id="logPanel">
+      <summary>Nhật ký debug <span id="logCount"></span></summary>
+      <div class="logbar">
+        <button type="button" id="copyLog">Sao chép</button>
+        <button type="button" id="clearLog">Xoá</button>
+      </div>
+      <pre id="logText">(chưa có log)</pre>
+    </details>
+
+    <div class="hint" id="hint">
+      Mở bài giảng Udemy, bấm Bắt đầu. Lần đầu có thể mất 30–60s để nạp model.
+    </div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,58 @@
+{
+  "manifest_version": 3,
+  "name": "SpeechTrans — Udemy VI",
+  "version": "0.1.0",
+  "description": "Dịch realtime bài giảng Udemy sang tiếng Việt: phụ đề song ngữ + giọng đọc tiếng Việt từ GPU local.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "tabCapture",
+    "offscreen",
+    "storage",
+    "activeTab",
+    "tabs",
+    "nativeMessaging",
+    "clipboardWrite",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://*.udemy.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "SpeechTrans — Udemy VI",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.udemy.com/*"
+      ],
+      "js": [
+        "src/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxM67lvTMGVJa5PWOXSuzi7yy73vmmLAKkVEY0z6BO/hkrrhy6X/Kee/QaamHx7vhcmoNWpsF22nkRX8T7VtKFxcQucqk3GS0l1V0mIpqrSl+RYl2EeVK8YZXatvz0+zO+5Qcx+S1arqc4nr+sPSOsHAjeL8NXhJiFpsCbdXfgGAdOxAmNX7XgTyodYli0Xz++Od7TgZ1TOYXIqcIVVJQ/YFi0fzzL1D5jaD/WH1/w8LwAQDAdyDz3X+7IATTftU9oOEHqllpleW0O04USOl9HrPGN22+5jSymU5mODdzSOSyOV3Jz+vuXyNGgbvz746mcZtOMoGGFrZzpAeuAGfviwIDAQAB",
+  "commands": {
+    "toggle-capture": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "Bắt đầu/dừng dịch bài giảng"
+    }
+  }
+}

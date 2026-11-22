@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>SpeechTrans — Bảng câu &amp; độ trễ</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0f16;
+        --panel: #141a24;
+        --line: #232c3a;
+        --text: #e8edf5;
+        --muted: #8b9ab0;
+        --accent: #2563eb;
+        --ok: #22c55e;
+        --warn: #f59e0b;
+        --err: #ef4444;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; background: var(--bg); color: var(--text);
+        font: 13px/1.45 "Inter", "Roboto", system-ui, sans-serif;
+        height: 100vh; display: flex; flex-direction: column;
+      }
+      header {
+        display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+        padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+      }
+      h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+      .dot.ok { background: var(--ok); }
+      .dot.err { background: var(--err); }
+      #state { font-size: 12px; color: var(--muted); }
+      .stats { display: flex; gap: 16px; font-size: 12px; color: var(--muted); }
+      .stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+      .spacer { flex: 1; }
+      button {
+        all: unset; cursor: pointer; font-size: 12px; color: #cbd5e1;
+        padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; background: #0f141c;
+      }
+      button:hover { background: #1b2431; color: #fff; }
+      .tablewrap { flex: 1; overflow: auto; }
+      table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+      thead th {
+        position: sticky; top: 0; z-index: 1; background: #101620;
+        text-align: left; font-weight: 600; color: var(--muted);
+        padding: 9px 12px; border-bottom: 1px solid var(--line); white-space: nowrap;
+      }
+      tbody td { padding: 9px 12px; border-bottom: 1px solid #171e29; vertical-align: top; }
+      tbody tr:hover { background: #121924; }
+      td.num { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+      td.en { color: #b8c4d6; width: 34%; }
+      td.vi { color: #fff; width: 38%; }
+      .bad { color: #ff9aa5; }
+      .good { color: #b7f3c9; }
+      .empty { padding: 30px; text-align: center; color: var(--muted); }
+      .pill { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: #1b2431; color: #cbd5e1; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Bảng câu &amp; độ trễ</h1>
+      <span class="dot" id="dot"></span>
+      <span id="state">chưa có dữ liệu</span>
+      <span class="spacer"></span>
+      <span class="stats">
+        <span>Câu: <b id="count">0</b></span>
+        <span>TB tổng: <b id="avgTotal">–</b></span>
+      </span>
+      <button id="copy">Copy TSV</button>
+      <button id="clear">Xoá</button>
+    </header>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Giờ</th>
+            <th>Audio</th>
+            <th>Nghe được (EN)</th>
+            <th>Dịch (VI)</th>
+            <th>ASR</th>
+            <th>Dịch</th>
+            <th>Tổng*</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="empty" id="empty">Chưa có câu nào. Bắt đầu dịch một bài giảng rồi mở lại trang này.</div>
+    </div>
+    <script type="module" src="transcript.js"></script>
+  </body>
+</html>
