@@ -884,6 +884,35 @@
     return ids;
   }
 
+  /** Sidebar closed? Ask Udemy for the curriculum (lectures in course order). */
+  async function lectureIdsFromApi(probe) {
+    const resources = (probe && probe.resources) || [];
+    const lectureApi = resources.find((url) => /\/users\/me\/subscribed-courses\/\d+\/lectures\/\d+\//.test(url));
+    const courseApi = resources.find((url) => /\/api-2\.0\/courses\/(\d+)\//.test(url));
+    const fromLecture = lectureApi && /\/courses\/(\d+)\//.exec(lectureApi);
+    const fromCourse = courseApi && /\/api-2\.0\/courses\/(\d+)\//.exec(courseApi);
+    const courseId = (fromLecture && fromLecture[1]) || (fromCourse && fromCourse[1]) || null;
+    dbg({ step: "curriculum-check", hasProbe: Boolean(probe), resources: resources.length, lectureApi: Boolean(lectureApi), courseId });
+    if (!courseId) return [];
+    const url =
+      `https://${location.hostname}/api-2.0/courses/${courseId}/subscriber-curriculum-items/` +
+      "?page_size=1000&fields[lecture]=id,title,sort_order&fields[chapter]=title,sort_order&fields[quiz]=title,sort_order";
+    try {
+      dbg({ step: "curriculum-url", url: url.slice(0, 140) });
+      const response = await fetch(url, { credentials: "include", headers: { Accept: "application/json" } });
+      const text = await response.text();
+      dbg({ step: "curriculum-status", status: response.status, length: text.length, head: text.slice(0, 120) });
+      if (!response.ok) return [];
+      const data = JSON.parse(text);
+      const results = Array.isArray(data.results) ? data.results : [];
+      dbg({ step: "curriculum-parsed", items: results.length });
+      return results.filter((item) => item._class === "lecture" && item.id).map((item) => String(item.id));
+    } catch (error) {
+      dbg({ step: "prefetch-api-error", message: String(error) });
+      return [];
+    }
+  }
+
   /** Translate the next lecture ahead of time so it opens instantly. */
   async function prefetchNextLecture() {
     if (prefetchState.running) return;
@@ -897,8 +926,14 @@
     if (!enabled) return;
 
     const current = currentLectureId();
-    const ids = courseLectureIds();
-    const index = current ? ids.indexOf(current) : -1;
+    let ids = courseLectureIds();
+    let index = current ? ids.indexOf(current) : -1;
+    let probe = null;
+    if (index < 0) {
+      probe = await requestProbe();
+      ids = await lectureIdsFromApi(probe);
+      index = current ? ids.indexOf(current) : -1;
+    }
     if (index < 0 || index + 1 >= ids.length) {
       dbg({ step: "prefetch-skip", current, index, total: ids.length });
       return;
@@ -918,7 +953,7 @@
     prefetchState.running = true;
     try {
       dbg({ step: "prefetch-start", nextId, index, total: ids.length });
-      const probe = await requestProbe();
+      if (!probe) probe = await requestProbe();
       const vtt = await vttForLecture(probe, nextId);
       if (!vtt) {
         dbg({ step: "prefetch-no-vtt", nextId });
@@ -1018,7 +1053,7 @@
     }, 1500);
   }, 1000);
 
-  dbg({ step: "content-ready", href: location.href });
+  dbg({ step: "content-ready", v: "0.3.6", href: location.href });
   if (document.readyState === "complete") autoLoadTranscript();
   else window.addEventListener("load", autoLoadTranscript);
 

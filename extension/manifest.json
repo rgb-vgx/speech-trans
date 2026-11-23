@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "SpeechTrans — Udemy VI",
-  "version": "0.3.4",
+  "version": "0.3.6",
   "description": "Dịch phụ đề bài giảng Udemy sang tiếng Việt (transcript + LLM), hiển thị phụ đề song ngữ EN/VI trên video.",
   "minimum_chrome_version": "116",
   "permissions": [
