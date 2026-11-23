@@ -506,37 +506,50 @@
 
   /** Udemy's lecture API (same-origin, cookie-authenticated) carries the
    *  caption URLs: fetch it so no transcript panel is needed. */
-  async function vttFromLectureApi(probe) {
+  function lectureApiUrl(probe, lectureId) {
     const resources = (probe && probe.resources) || [];
-    const apiUrl = resources.find((url) =>
-      /\/api-2\.0\/users\/me\/subscribed-courses\/\d+\/lectures\/\d+\//.test(url)
+    const url = resources.find((candidate) =>
+      /\/api-2\.0\/users\/me\/subscribed-courses\/\d+\/lectures\/\d+\//.test(candidate)
     );
+    if (!url) return null;
+    return lectureId ? url.replace(/(\/lectures\/)\d+(\/)/, `$1${lectureId}$2`) : url;
+  }
+
+  function findVttInJson(data) {
+    const found = [];
+    const walk = (node, depth) => {
+      if (!node || depth > 8) return;
+      if (typeof node === "string") {
+        if (/\.vtt(\?|$)/i.test(node) && !/thumb/i.test(node)) found.push(node);
+        return;
+      }
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item, depth + 1);
+        return;
+      }
+      if (typeof node === "object") {
+        for (const value of Object.values(node)) walk(value, depth + 1);
+      }
+    };
+    walk(data, 0);
+    return found.find((url) => /vtt-c\./i.test(url)) || found[0] || null;
+  }
+
+  async function vttForLecture(probe, lectureId) {
+    const apiUrl = lectureApiUrl(probe, lectureId);
     if (!apiUrl) return null;
     try {
       const response = await fetch(apiUrl, { credentials: "include", headers: { Accept: "application/json" } });
       if (!response.ok) return null;
-      const data = await response.json();
-      const found = [];
-      const walk = (node, depth) => {
-        if (!node || depth > 8) return;
-        if (typeof node === "string") {
-          if (/\.vtt(\?|$)/i.test(node) && !/thumb/i.test(node)) found.push(node);
-          return;
-        }
-        if (Array.isArray(node)) {
-          for (const item of node) walk(item, depth + 1);
-          return;
-        }
-        if (typeof node === "object") {
-          for (const value of Object.values(node)) walk(value, depth + 1);
-        }
-      };
-      walk(data, 0);
-      return found[0] || null;
+      return findVttInJson(await response.json());
     } catch (error) {
       console.warn("[speech-trans] lecture API failed", error);
       return null;
     }
+  }
+
+  function vttFromLectureApi(probe) {
+    return vttForLecture(probe, null);
   }
 
   /** The transcript panel in Udemy Business has no data-purpose attributes in
@@ -586,6 +599,65 @@
     } finally {
       if (token === loadToken) transcript.loading = false;
     }
+  }
+
+  async function translateRawCues(raw, key, { report = true } = {}) {
+      const batchSize = 20;
+      const texts = raw.map((cue) => cue.text);
+      const batches = [];
+      for (let start = 0; start < texts.length; start += batchSize) {
+        batches.push(texts.slice(start, start + batchSize));
+      }
+      const translations = new Array(texts.length).fill("");
+      let nextBatch = 0;
+      let done = 0;
+      const runBatch = async () => {
+        while (true) {
+          const index = nextBatch;
+          nextBatch += 1;
+          if (index >= batches.length) return;
+          const slice = batches[index];
+          let result = await chrome.runtime.sendMessage({
+            from: "content",
+            type: "translate-cues",
+            cues: slice,
+            lesson: key,
+          });
+          if (!result || result.error) {
+            await new Promise((resolve) => setTimeout(resolve, 1200));
+            result = await chrome.runtime.sendMessage({
+              from: "content",
+              type: "translate-cues",
+              cues: slice,
+              lesson: key,
+            });
+          }
+          if (!result || result.error) throw new Error(result ? result.error : "dịch thất bại");
+          const got = result.translations || [];
+          const offset = index * batchSize;
+          // Never fail the whole transcript: fall back to the English line.
+          for (let k = 0; k < slice.length; k += 1) translations[offset + k] = got[k] || slice[k];
+          done += slice.length;
+          if (report) transcriptStatus(`Đang dịch ${Math.min(done, texts.length)}/${texts.length} câu…`);
+        }
+      };
+      await runBatch(); // one batch at a time: the provider rate-limits bursts
+      if (translations.some((line) => !line)) {
+        throw new Error("Một số câu chưa dịch được — thử lại.");
+      }
+
+      dbg({ step: "translated", count: translations.length });
+      cues = raw.map((cue, index) => {
+        const start = cue.start;
+        const hasEnd = Number.isFinite(cue.end) && cue.end > start;
+        const end = hasEnd
+          ? cue.end
+          : index + 1 < raw.length
+            ? raw[index + 1].start
+            : start + 4;
+        return { start, end, en: cue.text, vi: translations[index] || "" };
+      });
+      return cues;
   }
 
   async function loadTranscriptInner(options, token) {
@@ -650,61 +722,7 @@
         );
       }
 
-      const batchSize = 20;
-      const texts = raw.map((cue) => cue.text);
-      const batches = [];
-      for (let start = 0; start < texts.length; start += batchSize) {
-        batches.push(texts.slice(start, start + batchSize));
-      }
-      const translations = new Array(texts.length).fill("");
-      let nextBatch = 0;
-      let done = 0;
-      const runBatch = async () => {
-        while (true) {
-          const index = nextBatch;
-          nextBatch += 1;
-          if (index >= batches.length) return;
-          const slice = batches[index];
-          let result = await chrome.runtime.sendMessage({
-            from: "content",
-            type: "translate-cues",
-            cues: slice,
-            lesson: key,
-          });
-          if (!result || result.error) {
-            await new Promise((resolve) => setTimeout(resolve, 1200));
-            result = await chrome.runtime.sendMessage({
-              from: "content",
-              type: "translate-cues",
-              cues: slice,
-              lesson: key,
-            });
-          }
-          if (!result || result.error) throw new Error(result ? result.error : "dịch thất bại");
-          const got = result.translations || [];
-          const offset = index * batchSize;
-          // Never fail the whole transcript: fall back to the English line.
-          for (let k = 0; k < slice.length; k += 1) translations[offset + k] = got[k] || slice[k];
-          done += slice.length;
-          transcriptStatus(`Đang dịch ${Math.min(done, texts.length)}/${texts.length} câu…`);
-        }
-      };
-      await runBatch(); // one batch at a time: the provider rate-limits bursts
-      if (translations.some((line) => !line)) {
-        throw new Error("Một số câu chưa dịch được — thử lại.");
-      }
-
-      dbg({ step: "translated", count: translations.length });
-      cues = raw.map((cue, index) => {
-        const start = cue.start;
-        const hasEnd = Number.isFinite(cue.end) && cue.end > start;
-        const end = hasEnd
-          ? cue.end
-          : index + 1 < raw.length
-            ? raw[index + 1].start
-            : start + 4;
-        return { start, end, en: cue.text, vi: translations[index] || "" };
-      });
+      cues = await translateRawCues(raw, key);
       await chrome.storage.local.set({ [cacheKey]: { cues, at: Date.now(), v: 3 } });
       dbg({ step: "cached", cues: cues.length, first: cues[0] && cues[0].vi });
     }
@@ -734,6 +752,7 @@
     setTimeout(() => {
       if (els && transcript.enabled) els.wrap.classList.add("quiet");
     }, 3000);
+    setTimeout(() => prefetchNextLecture(), 4000);
   }
 
   function clearTranscript() {
@@ -844,6 +863,82 @@
 
   // Auto-load the transcript whenever the Udemy transcript panel is open (or
   // opened later): no popup click needed. Cached lessons appear instantly.
+  const prefetchState = { running: false, attempted: new Set() };
+
+  function currentLectureId() {
+    const match = /\/learn\/lecture\/(\d+)/.exec(location.pathname);
+    return match ? match[1] : null;
+  }
+
+  function lessonKeyForLecture(id) {
+    return location.origin + location.pathname.replace(/\/learn\/lecture\/\d+/, `/learn/lecture/${id}`);
+  }
+
+  /** Lecture ids in course order, from the player's course-content sidebar. */
+  function courseLectureIds() {
+    const ids = [];
+    for (const link of document.querySelectorAll('a[href*="/learn/lecture/"]')) {
+      const match = /\/learn\/lecture\/(\d+)/.exec(link.getAttribute("href") || "");
+      if (match && !ids.includes(match[1])) ids.push(match[1]);
+    }
+    return ids;
+  }
+
+  /** Translate the next lecture ahead of time so it opens instantly. */
+  async function prefetchNextLecture() {
+    if (prefetchState.running) return;
+    let enabled = true;
+    try {
+      const stored = await chrome.storage.local.get("prefetchNext");
+      if (stored.prefetchNext === false) enabled = false;
+    } catch {
+      /* default on */
+    }
+    if (!enabled) return;
+
+    const current = currentLectureId();
+    const ids = courseLectureIds();
+    const index = current ? ids.indexOf(current) : -1;
+    if (index < 0 || index + 1 >= ids.length) {
+      dbg({ step: "prefetch-skip", current, index, total: ids.length });
+      return;
+    }
+    const nextId = ids[index + 1];
+    if (prefetchState.attempted.has(nextId)) return;
+
+    const nextKey = lessonKeyForLecture(nextId);
+    const cacheKey = `tr:${nextKey}`;
+    const cached = await chrome.storage.local.get(cacheKey);
+    if (cached && cached[cacheKey] && cached[cacheKey].v === 3 && cached[cacheKey].cues && cached[cacheKey].cues.length) {
+      dbg({ step: "prefetch-hit", nextId, cues: cached[cacheKey].cues.length });
+      return;
+    }
+
+    prefetchState.attempted.add(nextId);
+    prefetchState.running = true;
+    try {
+      dbg({ step: "prefetch-start", nextId, index, total: ids.length });
+      const probe = await requestProbe();
+      const vtt = await vttForLecture(probe, nextId);
+      if (!vtt) {
+        dbg({ step: "prefetch-no-vtt", nextId });
+        return;
+      }
+      const raw = await cuesFromVttUrl(vtt);
+      if (!raw.length) {
+        dbg({ step: "prefetch-no-cues", nextId });
+        return;
+      }
+      const cues = await translateRawCues(raw, nextKey, { report: false });
+      await chrome.storage.local.set({ [cacheKey]: { cues, at: Date.now(), v: 3 } });
+      dbg({ step: "prefetch-done", nextId, cues: cues.length, first: cues[0] && cues[0].vi });
+    } catch (error) {
+      dbg({ step: "prefetch-error", nextId, message: String(error) });
+    } finally {
+      prefetchState.running = false;
+    }
+  }
+
   function autoLoadTranscript() {
     dbg({ step: "auto-load-start", href: location.href });
     let tries = 0;

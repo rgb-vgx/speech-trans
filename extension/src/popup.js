@@ -7,6 +7,7 @@ const els = {
   captionsToggle: $("captionsToggle"),
   hideNativeToggle: $("hideNativeToggle"),
   hideEnglishToggle: $("hideEnglishToggle"),
+  prefetchToggle: $("prefetchToggle"),
   bottomInput: $("bottomInput"),
   bottomLabel: $("bottomLabel"),
   offsetInput: $("offsetInput"),
