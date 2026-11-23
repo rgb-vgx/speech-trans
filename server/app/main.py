@@ -149,7 +149,7 @@ def _build_services() -> PipelineServices:
             timeout=s.llm_timeout,
             batch_size=s.llm_batch,
             glossary=_glossary_hint(s),
-            fallback=mt.translate_many,
+            fallback=mt.translate_many if s.llm_fallback else None,
         ),
     )
 
@@ -272,6 +272,8 @@ async def health() -> dict:
             "mt": services.settings.mt_model,
         },
         "llm_translate": bool(services.llm and services.llm.enabled),
+        "live_enabled": services.settings.live_enabled,
+        "llm_fallback": services.settings.llm_fallback,
         "gpu": _gpu_info(),
     }
 
@@ -306,6 +308,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
 
     frames = 0
     dropped_loading = 0
+    live_notice_sent = False
     try:
         while True:
             message = await websocket.receive()
@@ -313,6 +316,17 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                 break
             payload = message.get("bytes")
             if payload is not None:
+                if not services.settings.live_enabled:
+                    if not live_notice_sent:
+                        live_notice_sent = True
+                        await conn.send_json(
+                            {
+                                "type": "status",
+                                "state": "disabled",
+                                "detail": "Live mode đã tắt — server chạy chế độ transcript",
+                            }
+                        )
+                    continue
                 if not services.ready.is_set():
                     # Audio that arrives while models are still loading cannot be
                     # processed: accepting it would build a multi-minute backlog

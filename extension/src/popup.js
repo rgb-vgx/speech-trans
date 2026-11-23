@@ -160,6 +160,11 @@ async function refreshHealth() {
   const health = info.health || {};
   const gpu = health.gpu || {};
   const vram = gpu.vram_free_mb ? `${(gpu.vram_free_mb / 1024).toFixed(1)} GB VRAM trống` : "";
+  const live = health.live_enabled !== false;
+  els.toggleBtn.style.display = live ? "" : "none";
+  els.captureStatus.style.display = live ? "" : "none";
+  if (!live) showHint("Chế độ live đã tắt (server chạy transcript-only) — chỉ hiện phụ đề transcript.");
+
   if (health.status === "ok") {
     setServer("ok", `Server sẵn sàng${vram ? " · " + vram : ""}`);
   } else {

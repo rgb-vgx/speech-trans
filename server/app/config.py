@@ -61,9 +61,13 @@ class Settings(BaseSettings):
     llm_session: str = "speech-trans"
     llm_batch: int = 20
     llm_timeout: float = 180.0
+    #: falls back to the local NLLB model (GPU) when the LLM is rate-limited
+    llm_fallback: bool = False
 
     # --- misc -------------------------------------------------------------
-    preload: bool = True
+    #: transcript-only server: no model preload, live capture disabled
+    preload: bool = False
+    live_enabled: bool = False
 
     @property
     def glossary_path(self) -> Path | None:

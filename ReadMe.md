@@ -9,7 +9,11 @@ Có hai chế độ:
 | Chế độ | Nguồn | Độ trễ | Ghi chú |
 |---|---|---|---|
 | **Live** | Thu âm tab → VAD → ASR → dịch | ~0.6–1.8 s sau khi hết câu | Dùng được mọi video |
-| **Transcript** | Panel Transcript của Udemy → dịch cả bài một lần (LLM) | 0 (hiển thị theo `video.currentTime`) | Chính xác hơn; cần bài giảng có transcript; có cache |
+| **Transcript** | Caption VTT của Udemy → dịch cả bài một lần (LLM) | 0 (hiển thị theo `video.currentTime`) | Chính xác hơn; có cache |
+
+Mặc định server chạy **transcript-only**: không nạp model, không dùng GPU, khởi động
+~4 giây, VRAM 0 GB. Live mode là tuỳ chọn — bật `ST_LIVE_ENABLED=true` (và
+`ST_PRELOAD=true` nếu muốn nạp sẵn model), khi đó server mới dùng GPU.
 
 ## Đo thực tế trên máy này (RTX 3060 12 GB)
 
@@ -52,8 +56,9 @@ uv sync
 uv run python -m app.main
 ```
 
-Lần chạy đầu tải model (~8 GB: NLLB 5.3 GB, Whisper large-v3 3 GB) và warm-up mất
-khoảng 2–4 phút. Kiểm tra: `curl -s http://localhost:8787/health`.
+Chế độ mặc định (transcript-only) không tải model và khởi động trong vài giây.
+Nếu bật live mode, lần chạy đầu tải model (~8 GB: NLLB 5.3 GB, Whisper large-v3
+3 GB) và warm-up mất khoảng 2–4 phút. Kiểm tra: `curl -s http://localhost:8787/health`.
 
 ### 2. Native messaging bridge
 
@@ -72,7 +77,9 @@ và wrapper `server/scripts/native_host.sh`. **Khởi động lại Chrome** sau
 
 ## Sử dụng
 
-### Live (phụ đề realtime)
+### Live (phụ đề realtime — tuỳ chọn)
+
+Bật `ST_LIVE_ENABLED=true` trong `server/.env` rồi khởi động lại server.
 
 1. Mở bài giảng → icon SpeechTrans → **Bắt đầu**.
 2. Phụ đề EN (nhỏ) + VI (lớn) hiện ở đáy video.
@@ -127,6 +134,9 @@ Benchmark ghi JSON vào `benchmarks/<timestamp>/`; `analyze_session.py` tạo
 | `ST_GLOSSARY_FILE` | `glossary.json` | thuật ngữ giữ nguyên tiếng Anh |
 | `ST_LLM_API_KEY` | — | API dịch cả bài cho chế độ transcript |
 | `ST_LLM_MODEL` | `deepseek-v4.1-flash` | |
+| `ST_PRELOAD` | `false` | `true` để nạp sẵn model lúc khởi động (live mode) |
+| `ST_LIVE_ENABLED` | `false` | `true` để bật thu âm realtime (cần GPU) |
+| `ST_LLM_FALLBACK` | `false` | `true` để fallback sang NLLB local khi LLM rate-limit |
 
 ## Sự cố thường gặp
 
