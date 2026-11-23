@@ -172,7 +172,13 @@ async function translateCues(cues, lesson) {
       timeout: 300,
     });
     if (!response) return { error: "bridge không phản hồi" };
-    if (response.status === 0) return { error: response.error || "bridge lỗi" };
+    if (response.status === 0) {
+      const message = String(response.error || "");
+      if (/refused|urlopen|connection/i.test(message)) {
+        return { error: "Server chưa chạy — mở terminal: cd server && uv run python -m app.main" };
+      }
+      return { error: message || "bridge lỗi" };
+    }
     if (response.status !== 200) {
       return { error: (response.body && response.body.detail) || `HTTP ${response.status}` };
     }
