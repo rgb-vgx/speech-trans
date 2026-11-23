@@ -327,8 +327,24 @@ async function loadLastUtterance() {
   }
 }
 
+async function loadTranscriptState() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || tab.id === undefined) return;
+    const state = await chrome.tabs.sendMessage(tab.id, { type: "transcript-state" });
+    if (state && state.enabled) {
+      els.transcriptStatus.textContent = `Đang hiện phụ đề transcript (${state.cues} câu)`;
+    } else if (state) {
+      els.transcriptStatus.textContent = "Chưa nạp cho bài này";
+    }
+  } catch {
+    /* not a lecture page */
+  }
+}
+
 refreshStatus();
 refreshHealth();
+loadTranscriptState();
 loadLog();
 loadLastUtterance();
 setInterval(refreshHealth, 4000);

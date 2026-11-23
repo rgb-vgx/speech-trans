@@ -212,7 +212,7 @@
     }
   }
 
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message) return false;
     if (message.type === "transcript-load") {
       loadTranscript().catch((error) => transcriptStatus(String(error && error.message ? error.message : error), "error"));
@@ -221,6 +221,15 @@
     if (message.type === "transcript-clear") {
       clearTranscript();
       return false;
+    }
+    if (message.type === "transcript-state") {
+      sendResponse({
+        enabled: transcript.enabled,
+        cues: transcript.cues.length,
+        index: transcript.index,
+        active: transcript.enabled && transcript.cues.length > 0,
+      });
+      return true;
     }
     if (message.type === "transcript-debug") {
       chrome.runtime
