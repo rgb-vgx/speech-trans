@@ -110,8 +110,8 @@ uv run python scripts/bench.py pipeline --sessions 1 --seconds 60
 uv run python scripts/analyze_session.py --since "2026-11-23 00:26:20"
 ```
 
-Benchmark ghi JSON vào `benchmarks/<timestamp>/`; `analyze_session.py` tạo
-`benchmarks/real-<date>/REPORT.md` từ log phiên thật.
+Kết quả benchmark ghi vào `benchmarks/` **trên máy** (đã gitignore, không commit);
+`analyze_session.py` tạo `benchmarks/real-<date>/REPORT.md` từ log phiên thật.
 
 ## Log runtime
 

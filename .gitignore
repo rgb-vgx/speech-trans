@@ -13,3 +13,6 @@ logs/
 
 # generated per machine by scripts/install_native_host.py
 server/scripts/native_host.sh
+
+# benchmark outputs (may embed lecture content)
+benchmarks/
