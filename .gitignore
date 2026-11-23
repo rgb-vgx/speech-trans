@@ -10,3 +10,6 @@ logs/
 
 # OS / editors
 .DS_Store
+
+# generated per machine by scripts/install_native_host.py
+server/scripts/native_host.sh
