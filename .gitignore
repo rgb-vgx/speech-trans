@@ -13,6 +13,5 @@ logs/
 
 # generated per machine by scripts/install_native_host.py
 server/scripts/native_host.sh
-
-# benchmark outputs (may embed lecture content)
-benchmarks/
+server/scripts/native_host.bat
+server/scripts/com.speechtrans.bridge.json

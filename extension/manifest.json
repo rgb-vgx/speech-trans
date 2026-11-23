@@ -1,14 +1,11 @@
 {
   "manifest_version": 3,
   "name": "SpeechTrans — Udemy VI",
-  "version": "0.1.0",
-  "description": "Dịch realtime bài giảng Udemy sang tiếng Việt: phụ đề song ngữ + giọng đọc tiếng Việt từ GPU local.",
+  "version": "0.2.0",
+  "description": "Dịch phụ đề bài giảng Udemy sang tiếng Việt (transcript + LLM), hiển thị phụ đề song ngữ EN/VI trên video.",
   "minimum_chrome_version": "116",
   "permissions": [
-    "tabCapture",
-    "offscreen",
     "storage",
-    "activeTab",
     "tabs",
     "nativeMessaging",
     "clipboardWrite",
@@ -46,13 +43,5 @@
       "run_at": "document_idle"
     }
   ],
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxM67lvTMGVJa5PWOXSuzi7yy73vmmLAKkVEY0z6BO/hkrrhy6X/Kee/QaamHx7vhcmoNWpsF22nkRX8T7VtKFxcQucqk3GS0l1V0mIpqrSl+RYl2EeVK8YZXatvz0+zO+5Qcx+S1arqc4nr+sPSOsHAjeL8NXhJiFpsCbdXfgGAdOxAmNX7XgTyodYli0Xz++Od7TgZ1TOYXIqcIVVJQ/YFi0fzzL1D5jaD/WH1/w8LwAQDAdyDz3X+7IATTftU9oOEHqllpleW0O04USOl9HrPGN22+5jSymU5mODdzSOSyOV3Jz+vuXyNGgbvz746mcZtOMoGGFrZzpAeuAGfviwIDAQAB",
-  "commands": {
-    "toggle-capture": {
-      "suggested_key": {
-        "default": "Alt+Shift+S"
-      },
-      "description": "Bắt đầu/dừng dịch bài giảng"
-    }
-  }
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxM67lvTMGVJa5PWOXSuzi7yy73vmmLAKkVEY0z6BO/hkrrhy6X/Kee/QaamHx7vhcmoNWpsF22nkRX8T7VtKFxcQucqk3GS0l1V0mIpqrSl+RYl2EeVK8YZXatvz0+zO+5Qcx+S1arqc4nr+sPSOsHAjeL8NXhJiFpsCbdXfgGAdOxAmNX7XgTyodYli0Xz++Od7TgZ1TOYXIqcIVVJQ/YFi0fzzL1D5jaD/WH1/w8LwAQDAdyDz3X+7IATTftU9oOEHqllpleW0O04USOl9HrPGN22+5jSymU5mODdzSOSyOV3Jz+vuXyNGgbvz746mcZtOMoGGFrZzpAeuAGfviwIDAQAB"
 }

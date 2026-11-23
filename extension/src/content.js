@@ -7,12 +7,9 @@
   if (window.__speechTransLoaded) return;
   window.__speechTransLoaded = true;
 
-  const HIDE_AFTER_MS = 25000;
-
   let host = null;
   let shadow = null;
   let els = null;
-  let hideTimer = null;
   let captionsEnabled = true;
 
   function buildHost() {
@@ -63,7 +60,6 @@
         }
         button:hover { background: rgba(37,99,235,.35); color: #fff; }
         button:active { transform: translateY(1px); }
-        #latency { font-variant-numeric: tabular-nums; }
       </style>
       <div class="wrap" id="wrap">
         <div class="line en" id="en"></div>
@@ -72,7 +68,6 @@
           <span class="meta">
             <span class="dot" id="dot"></span>
             <span id="status">SpeechTrans</span>
-            <span id="latency"></span>
           </span>
         </div>
       </div>
@@ -83,7 +78,6 @@
       vi: shadow.getElementById("vi"),
       dot: shadow.getElementById("dot"),
       status: shadow.getElementById("status"),
-      latency: shadow.getElementById("latency"),
     };
     mount();
   }
@@ -126,15 +120,6 @@
     startPositionLoop.timer = setInterval(positionOverlay, 500);
   }
 
-  function show() {
-    positionOverlay();
-    startPositionLoop();
-    if (!els || !captionsEnabled) return;
-    els.wrap.classList.add("show");
-    if (hideTimer) clearTimeout(hideTimer);
-    hideTimer = setTimeout(() => els && els.wrap.classList.remove("show"), HIDE_AFTER_MS);
-  }
-
   function setLine(el, text) {
     if (!el) return;
     const clean = (text || "").trim();
@@ -156,59 +141,12 @@
     switch (state) {
       case "connected":
         return "Đang dịch";
-      case "capturing":
-        return "Đang thu âm";
-      case "loading":
-        return "Đang nạp model…";
       case "disconnected":
         return "Mất kết nối server";
       case "error":
         return "Lỗi";
       default:
         return "SpeechTrans";
-    }
-  }
-
-  function setLatency(ms) {
-    if (!els) return;
-    els.latency.textContent = Number.isFinite(ms) ? `${Math.round(ms)} ms` : "";
-  }
-
-  function handleEvent(event) {
-    buildHost();
-    if (!event || !event.type) return;
-    switch (event.type) {
-      case "asr":
-        setLine(els.en, event.text);
-        show();
-        break;
-
-      case "translation":
-        setLine(els.vi, event.text);
-        setLine(els.en, "");
-        setLatency(event.total_ms);
-        show();
-        break;
-
-      case "status":
-        setStatus(event.state, event.detail);
-        if (event.state && event.state !== "idle") show();
-        break;
-
-      case "error":
-        setStatus("error", `Lỗi ${event.stage || ""}: ${event.message || ""}`.trim());
-        show();
-        break;
-
-      case "config":
-        if (typeof event.captions === "boolean") {
-          captionsEnabled = event.captions;
-          if (!captionsEnabled) els.wrap.classList.remove("show");
-        }
-        break;
-
-      default:
-        break;
     }
   }
 
@@ -231,16 +169,16 @@
       });
       return true;
     }
+    if (message.type === "set-captions") {
+      captionsEnabled = message.captions !== false;
+      if (!captionsEnabled && els) els.wrap.classList.remove("show");
+      return false;
+    }
     if (message.type === "transcript-debug") {
       chrome.runtime
         .sendMessage({ from: "content", type: "transcript-status", text: JSON.stringify(transcriptDebug()).slice(0, 900) })
         .catch(() => {});
       return false;
-    }
-    if (message.from === "background" && message.type === "popup-event") {
-      handleEvent(message.payload);
-    } else if (message.type && message.from !== "background") {
-      handleEvent(message);
     }
     return false;
   });
@@ -742,8 +680,7 @@
     }
     const cue = transcript.cues[index];
     // Transcript mode keeps the captions visible while a cue is active: no
-    // 25 s auto-hide, and re-show on every tick (video may be paused).
-    if (hideTimer) clearTimeout(hideTimer);
+    // auto-hide, and re-show on every tick (video may be paused).
     positionOverlay();
     startPositionLoop();
     els.wrap.classList.add("show");
@@ -767,11 +704,6 @@
         });
       }, 200);
     }
-  }
-
-  function setCaptionsVisible() {
-    if (!els || !captionsEnabled) return;
-    els.wrap.classList.add("show");
   }
 
   document.addEventListener("fullscreenchange", () => {
@@ -850,17 +782,9 @@
   else window.addEventListener("load", autoLoadTranscript);
 
   chrome.runtime
-    .sendMessage({ from: "content", type: "get-status" })
-    .then((status) => {
-      if (!status) return;
-      if (status.config) {
-        captionsEnabled = status.config.captions !== false;
-      }
-      if (status.running) {
-        buildHost();
-        setStatus(status.server && status.server.state ? status.server.state : "capturing");
-        show();
-      }
+    .sendMessage({ from: "content", type: "get-config" })
+    .then((config) => {
+      if (config && typeof config.captions === "boolean") captionsEnabled = config.captions;
     })
     .catch(() => {});
 })();

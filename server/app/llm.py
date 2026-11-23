@@ -13,7 +13,6 @@ import re
 import time
 import urllib.error
 import urllib.request
-from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,6 @@ class LLMTranslator:
         timeout: float = 180.0,
         batch_size: int = 20,
         glossary: str = "",
-        fallback: Callable[[list[str]], list[str]] | None = None,
     ) -> None:
         self.base_url = base_url
         self.api_key = api_key
@@ -46,7 +44,6 @@ class LLMTranslator:
         self.timeout = timeout
         self.batch_size = max(1, batch_size)
         self.glossary = glossary.strip()
-        self._fallback = fallback
 
     @property
     def enabled(self) -> bool:
@@ -70,23 +67,24 @@ class LLMTranslator:
         try:
             result = self._request(self._prompt(batch))
         except RuntimeError as exc:
-            text = str(exc)
-            if "429" in text or "rate_limit" in text:
-                # Rate limited: splitting will not help. Use the local model so
-                # the user still gets Vietnamese.
-                logger.warning("LLM rate-limited, falling back to the local translator")
-                return self._fallback_batch(batch)
             if len(batch) > 1:
-                # A long batch can still run out of tokens; split and retry.
+                # A long batch can run out of tokens or hit a transient error;
+                # split and retry before giving up on individual lines.
                 middle = len(batch) // 2
                 logger.warning(
-                    "LLM batch @%d failed, splitting %d -> %d+%d", offset, len(batch), middle, len(batch) - middle
+                    "LLM batch @%d failed (%s), splitting %d -> %d+%d",
+                    offset,
+                    str(exc)[:160],
+                    len(batch),
+                    middle,
+                    len(batch) - middle,
                 )
                 return self._translate_batch(batch[:middle], offset) + self._translate_batch(
                     batch[middle:], offset + middle
                 )
-            logger.warning("LLM failed for a single line @%d, falling back", offset)
-            return self._fallback_batch(batch)
+            # Single line: keep the English text so the subtitle is never lost.
+            logger.warning("LLM failed for a single line @%d, keeping source text", offset)
+            return batch
 
         if len(result) != len(batch):
             logger.warning(
@@ -101,7 +99,7 @@ class LLMTranslator:
                     single = self._request(self._prompt([text]))
                     fixed.append(single[0] if single else text)
                 except RuntimeError:
-                    fixed.append(self._fallback_batch([text])[0])
+                    fixed.append(text)
             result = fixed
 
         logger.info(
@@ -111,18 +109,6 @@ class LLMTranslator:
             (time.perf_counter() - started) * 1000,
         )
         return result
-
-    def _fallback_batch(self, batch: list[str]) -> list[str]:
-        if self._fallback is None:
-            return batch
-        try:
-            translated = self._fallback(list(batch))
-            return [
-                translated[i] if i < len(translated) and translated[i] else batch[i] for i in range(len(batch))
-            ]
-        except Exception:  # noqa: BLE001 - never fail the whole transcript
-            logger.exception("fallback translator failed")
-            return batch
 
     def _prompt(self, batch: list[str]) -> str:
         lines = "\n".join(f"{index + 1}. {text}" for index, text in enumerate(batch))

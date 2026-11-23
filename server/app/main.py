@@ -1,4 +1,4 @@
-"""FastAPI entry point: WebSocket pipeline + small HTTP API for the extension."""
+"""FastAPI entry point: HTTP API used by the extension (transcript translation)."""
 
 from __future__ import annotations
 
@@ -10,18 +10,14 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import transcript
-from .asr import WhisperASR
-from .llm import LLMTranslator
 from .config import get_settings
-from .pipeline import PipelineServices, Session
-from .protocol import ProtocolError, decode_client_audio
-from .translate import NLLBTranslator
+from .llm import LLMTranslator
 
 logger = logging.getLogger("speech_trans")
 _STARTED_AT = time.time()
@@ -38,7 +34,7 @@ def setup_logging(level: str = "INFO") -> Path | None:
     """Console + one file per day in ``logs/server-YYYY-MM-DD.log``.
 
     Idempotent: uvicorn's own loggers propagate here because ``run()`` passes
-    ``log_config=None``, so startup, access and app logs all land in the file.
+    ``log_config=None``, so startup and access logs all land in the file.
     """
     logging.basicConfig(
         level=getattr(logging, level.upper(), logging.INFO),
@@ -85,11 +81,6 @@ class LocalNetworkCORS:
         headers = Headers(scope=scope)
         origin = headers.get("origin")
         requested = headers.get("access-control-request-method")
-        if scope.get("path") in ("/health", "/voices"):
-            logger.debug(
-                "http %s %s origin=%r acrpn=%r", scope["method"], scope.get("path"), origin,
-                headers.get("access-control-request-private-network"),
-            )
 
         if not origin:
             await self.app(scope, receive, send)
@@ -118,39 +109,16 @@ class LocalNetworkCORS:
         await self.app(scope, receive, send_with_cors)
 
 
-def _build_services() -> PipelineServices:
+def _build_llm() -> LLMTranslator:
     s = get_settings()
-    mt = NLLBTranslator(
-        s.mt_model,
-        device=s.mt_device,
-        dtype=s.mt_dtype,
-        num_beams=s.mt_num_beams,
-        max_input_tokens=s.mt_max_input_tokens,
-        max_new_tokens=s.mt_max_new_tokens,
-        glossary_path=s.glossary_path,
-    )
-    return PipelineServices(
-        settings=s,
-        asr=WhisperASR(
-            s.asr_model,
-            device=s.asr_device,
-            compute_type=s.asr_compute_type,
-            language=s.asr_language,
-            beam_size=s.asr_beam_size,
-            initial_prompt=s.asr_initial_prompt,
-            cpu_threads=s.asr_cpu_threads,
-        ),
-        mt=mt,
-        llm=LLMTranslator(
-            base_url=s.llm_base_url,
-            api_key=s.llm_api_key,
-            model=s.llm_model,
-            session=s.llm_session,
-            timeout=s.llm_timeout,
-            batch_size=s.llm_batch,
-            glossary=_glossary_hint(s),
-            fallback=mt.translate_many if s.llm_fallback else None,
-        ),
+    return LLMTranslator(
+        base_url=s.llm_base_url,
+        api_key=s.llm_api_key,
+        model=s.llm_model,
+        session=s.llm_session,
+        timeout=s.llm_timeout,
+        batch_size=s.llm_batch,
+        glossary=_glossary_hint(s),
     )
 
 
@@ -169,56 +137,19 @@ def _glossary_hint(settings) -> str:
     return ", ".join(list(terms)[:40])
 
 
-async def _preload(services: PipelineServices) -> None:
-    logger.info("loading models…")
-    try:
-        await asyncio.to_thread(services.load_blocking)
-        logger.info("models ready")
-    except Exception as exc:  # noqa: BLE001 - surfaced by /health
-        services.load_error = f"{type(exc).__name__}: {exc}"
-        logger.exception("model preload failed")
-    finally:
-        services.ready.set()
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     path = setup_logging(get_settings().log_level)
     logger.info("=== speech-trans server starting (pid=%d) ===", os.getpid())
     if path is not None:
         logger.info("logging to %s", path)
-    services = _build_services()
-    app.state.services = services
-    task: asyncio.Task | None = None
-    if get_settings().preload:
-        task = asyncio.create_task(_preload(services), name="model-preload")
-    else:
-        services.ready.set()
+    app.state.llm = _build_llm()
     yield
-    if task is not None:
-        task.cancel()
 
 
-app = FastAPI(title="speech-trans", version="0.1.0", lifespan=lifespan)
-# Local-only server; the extension calls /health and /voices from its popup.
+app = FastAPI(title="speech-trans", version="0.2.0", lifespan=lifespan)
+# Local-only server; the extension calls these endpoints through its bridge.
 app.add_middleware(LocalNetworkCORS)
-
-
-def _gpu_info() -> dict:
-    try:
-        import torch
-
-        if not torch.cuda.is_available():
-            return {"cuda": False}
-        free, total = torch.cuda.mem_get_info()
-        return {
-            "cuda": True,
-            "device": torch.cuda.get_device_name(0),
-            "vram_free_mb": round(free / 2**20),
-            "vram_total_mb": round(total / 2**20),
-        }
-    except Exception:  # noqa: BLE001
-        return {"cuda": False}
 
 
 class CuesRequest(BaseModel):
@@ -239,10 +170,9 @@ async def client_log(req: ClientLogRequest) -> dict:
 @app.post("/translate-cues")
 async def translate_cues(req: CuesRequest) -> dict:
     """Translate subtitle cues in one batch (transcript mode)."""
-    services: PipelineServices = app.state.services
-    llm = services.llm
-    if llm is None or not llm.enabled:
-        raise HTTPException(status_code=503, detail="LLM endpoint not configured")
+    llm: LLMTranslator = app.state.llm
+    if not llm.enabled:
+        raise HTTPException(status_code=503, detail="LLM endpoint not configured (ST_LLM_API_KEY)")
     if not req.cues:
         return {"translations": []}
     try:
@@ -256,132 +186,14 @@ async def translate_cues(req: CuesRequest) -> dict:
 
 @app.get("/health")
 async def health() -> dict:
-    services: PipelineServices = app.state.services
-    if services.load_error:
-        status = "error"
-    elif services.ready.is_set():
-        status = "ok"
-    else:
-        status = "loading"
+    llm: LLMTranslator = app.state.llm
     return {
-        "status": status,
-        "load_error": services.load_error,
+        "status": "ok",
         "uptime_s": round(time.time() - _STARTED_AT, 1),
-        "models": {
-            "asr": services.settings.asr_model,
-            "mt": services.settings.mt_model,
-        },
-        "llm_translate": bool(services.llm and services.llm.enabled),
-        "live_enabled": services.settings.live_enabled,
-        "llm_fallback": services.settings.llm_fallback,
-        "gpu": _gpu_info(),
+        "mode": "transcript",
+        "llm_translate": llm.enabled,
+        "model": llm.model,
     }
-
-
-class WsConnection:
-    """Serialises concurrent sends (workers + request loop share the socket)."""
-
-    def __init__(self, websocket: WebSocket) -> None:
-        self._ws = websocket
-        self._lock = asyncio.Lock()
-
-    async def send_json(self, payload: dict) -> None:
-        async with self._lock:
-            await self._ws.send_text(json.dumps(payload, ensure_ascii=False))
-
-
-@app.websocket("/ws")
-async def ws_endpoint(websocket: WebSocket) -> None:
-    await websocket.accept()
-    services: PipelineServices = websocket.app.state.services
-    conn = WsConnection(websocket)
-    session = Session(services, conn.send_json)
-    logger.info(
-        "client connected (%s, origin=%r, ua=%r)",
-        websocket.client,
-        websocket.headers.get("origin"),
-        (websocket.headers.get("user-agent") or "")[:60],
-    )
-    if not services.ready.is_set():
-        await conn.send_json({"type": "status", "state": "loading", "detail": "models are loading"})
-    await session.start()
-
-    frames = 0
-    dropped_loading = 0
-    live_notice_sent = False
-    try:
-        while True:
-            message = await websocket.receive()
-            if message["type"] == "websocket.disconnect":
-                break
-            payload = message.get("bytes")
-            if payload is not None:
-                if not services.settings.live_enabled:
-                    if not live_notice_sent:
-                        live_notice_sent = True
-                        await conn.send_json(
-                            {
-                                "type": "status",
-                                "state": "disabled",
-                                "detail": "Live mode đã tắt — server chạy chế độ transcript",
-                            }
-                        )
-                    continue
-                if not services.ready.is_set():
-                    # Audio that arrives while models are still loading cannot be
-                    # processed: accepting it would build a multi-minute backlog
-                    # and (before the load locks) race the preloader.
-                    dropped_loading += 1
-                    if dropped_loading == 1:
-                        logger.info("audio arrived before models were ready; dropping frames")
-                    continue
-                try:
-                    samples = decode_client_audio(payload)
-                except ProtocolError as exc:
-                    logger.warning("bad audio frame: %s", exc)
-                    continue
-                frames += 1
-                if frames == 1:
-                    logger.info("first audio frame received (%d samples)", samples.size)
-                elif frames % 500 == 0:
-                    logger.info("audio frames received: %d (%.0fs)", frames, frames * 0.1)
-                try:
-                    await session.feed_audio(samples)
-                except Exception as exc:  # noqa: BLE001
-                    logger.exception("VAD failed")
-                    await conn.send_json({"type": "error", "stage": "vad", "message": str(exc)})
-                continue
-
-            text = message.get("text")
-            if text is None:
-                continue
-            try:
-                control = json.loads(text)
-            except json.JSONDecodeError:
-                logger.warning("ignoring non-JSON control message")
-                continue
-            kind = control.get("type")
-            if kind == "ping":
-                await conn.send_json({"type": "pong", "t": control.get("t")})
-            elif kind == "stats":
-                await conn.send_json(
-                    {
-                        "type": "stats",
-                        "asr_queue": session._queue.qsize(),  # noqa: SLF001 - diagnostics
-                        "mt_queue": session._mt_queue.qsize(),  # noqa: SLF001
-                    }
-                )
-            else:
-                logger.debug("unknown control message: %s", kind)
-    except WebSocketDisconnect:
-        pass
-    finally:
-        await session.close()
-        logger.info(
-            "client disconnected after %d audio frames (%d dropped while loading)",
-            frames,
-            dropped_loading,
-        )
 
 
 def _port_in_use(host: str, port: int) -> bool:
@@ -403,9 +215,7 @@ def run() -> None:
     setup_logging(settings.log_level)
     if _port_in_use(settings.host, settings.port):
         logger.error(
-            "port %s:%d is already in use — another speech-trans server is running. "
-            "Stop it first (pkill -9 -f '[a]pp.main'), otherwise both load 6+ GB of "
-            "models and the GPU runs out of memory.",
+            "port %s:%d is already in use — another speech-trans server is running. Stop it first.",
             settings.host,
             settings.port,
         )
@@ -416,8 +226,6 @@ def run() -> None:
         port=settings.port,
         log_level=settings.log_level.lower(),
         log_config=None,
-        ws_ping_interval=20,
-        ws_ping_timeout=20,
     )
 
 

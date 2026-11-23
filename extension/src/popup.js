@@ -1,34 +1,25 @@
-
+/** Popup: server status, caption toggle, transcript load/clear, debug log. */
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  server: $("server"),
   serverDot: $("serverDot"),
   serverText: $("serverText"),
-  toggleBtn: $("toggleBtn"),
   captionsToggle: $("captionsToggle"),
   hint: $("hint"),
-  captureStatus: $("captureStatus"),
   logText: $("logText"),
   logCount: $("logCount"),
   copyLog: $("copyLog"),
   clearLog: $("clearLog"),
-  lastUtterance: $("lastUtterance"),
-  openTranscript: $("openTranscript"),
   transcriptStatus: $("transcriptStatus"),
   loadTranscript: $("loadTranscript"),
   clearTranscript: $("clearTranscript"),
 };
 
-function describeUtterance(row) {
-  if (!row) return "Chưa có câu nào";
-  const parts = [`#${row.id}`];
-  if (Number.isFinite(row.totalMs)) parts.push(`tổng ${Math.round(row.totalMs)}ms`);
-  return parts.join(" · ");
-}
-
-let status = null;
 let logEntries = [];
+
+function send(message) {
+  return chrome.runtime.sendMessage({ from: "popup", ...message });
+}
 
 function fmtTime(ms) {
   const d = new Date(ms);
@@ -76,21 +67,9 @@ async function loadLog() {
   }
 }
 
-function setCapture(text, kind = "") {
-  if (!els.captureStatus) return;
-  els.captureStatus.classList.remove("err", "ok");
-  if (kind) els.captureStatus.classList.add(kind);
-  els.captureStatus.textContent = text;
-}
-
-function send(message) {
-  return chrome.runtime.sendMessage({ from: "popup", ...message });
-}
-
 function showError(message) {
   els.hint.classList.add("error");
   els.hint.textContent = message;
-  setCapture(message, "err");
 }
 
 function showHint(message) {
@@ -105,50 +84,10 @@ function setServer(state, text) {
   els.serverText.textContent = text;
 }
 
-function render() {
-  const running = Boolean(status && status.running);
-  els.toggleBtn.textContent = running ? "Dừng" : "Bắt đầu";
-  els.toggleBtn.classList.toggle("stop", running);
-  els.toggleBtn.disabled = false;
-
-  const config = (status && status.config) || {};
-  els.captionsToggle.checked = config.captions !== false;
-
-  if (running) {
-    const server = (status && status.server) || {};
-    if (server.state === "error" || server.state === "disconnected") {
-      setCapture(server.detail || server.state, "err");
-    } else if (server.state === "connected") {
-      setCapture("Đang dịch phụ đề", "ok");
-    } else if (server.state === "capturing") {
-      setCapture("Đang khởi động thu âm…");
-    } else {
-      setCapture("Đang chạy, chờ kết nối server…");
-    }
-  } else {
-    setCapture("Chưa bắt đầu");
-  }
-}
-
-async function refreshStatus() {
-  try {
-    const next = await send({ type: "get-status" });
-    if (next && !next.error) {
-      status = next;
-      render();
-    } else if (next && next.error) {
-      showError(next.error);
-      els.toggleBtn.disabled = false;
-    }
-  } catch (error) {
-    showError(String(error));
-  }
-}
-
 async function refreshHealth() {
   let info;
   try {
-    info = await send({ type: "server-info" });
+    info = await send({ type: "server-info", force: true });
   } catch (error) {
     setServer("err", "Bridge chưa cài (chạy scripts/install_native_host.py)");
     return;
@@ -158,76 +97,36 @@ async function refreshHealth() {
     return;
   }
   const health = info.health || {};
-  const gpu = health.gpu || {};
-  const vram = gpu.vram_free_mb ? `${(gpu.vram_free_mb / 1024).toFixed(1)} GB VRAM trống` : "";
-  const live = health.live_enabled !== false;
-  els.toggleBtn.style.display = live ? "" : "none";
-  els.captureStatus.style.display = live ? "" : "none";
-  if (!live) showHint("Chế độ live đã tắt (server chạy transcript-only) — chỉ hiện phụ đề transcript.");
-
-  if (health.status === "ok") {
-    setServer("ok", `Server sẵn sàng${vram ? " · " + vram : ""}`);
-  } else {
-    setServer("warn", "Server đang nạp model… (có thể mất 30–60s)");
+  if (health.status !== "ok") {
+    setServer("", "Server chưa sẵn sàng");
+    return;
   }
+  if (health.llm_translate === false) {
+    setServer("err", "Server thiếu ST_LLM_API_KEY");
+    return;
+  }
+  setServer("ok", `Server sẵn sàng · ${health.model || "LLM"}`);
 }
 
-async function toggle() {
-  els.toggleBtn.disabled = true;
-  const wasRunning = Boolean(status && status.running);
+async function loadConfig() {
   try {
-    let result;
-    if (wasRunning) {
-      result = await send({ type: "stop" });
-    } else {
-      // Mint the stream id here: this click is a user gesture and the action
-      // click already granted activeTab, which tabCapture requires. Doing it
-      // from the service worker loses that context on some Chrome versions.
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab || tab.id === undefined) throw new Error("Không tìm thấy tab đang mở.");
-      if (!tab.url || !/^https:\/\/([a-z0-9-]+\.)*udemy\.com\//i.test(tab.url)) {
-        throw new Error("Hãy mở trang bài giảng Udemy trên tab đang active.");
-      }
-      let streamId;
-      try {
-        streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
-      } catch (error) {
-        throw new Error(
-          `Chrome không cho thu tab này: ${error && error.message ? error.message : error}. ` +
-            "Thử bấm lại sau khi click vào video, hoặc reload trang Udemy."
-        );
-      }
-      result = await send({ type: "start", streamId, tabId: tab.id });
-    }
-
-    if (result && result.error) showError(result.error);
-    else {
-      showHint(
-        wasRunning
-          ? "Đã dừng."
-          : "Đang chạy. Phụ đề hiện phía trên video; bật “Đọc bản dịch” để nghe tiếng Việt."
-      );
-      status = result;
-      render();
-    }
-  } catch (error) {
-    // Keep the error visible in the status line (render would clear it).
-    showError(String(error && error.message ? error.message : error));
-  } finally {
-    els.toggleBtn.disabled = false;
+    const config = await send({ type: "get-config" });
+    if (config && typeof config.captions === "boolean") els.captionsToggle.checked = config.captions;
+  } catch {
+    /* ignore */
   }
 }
 
 async function updateConfig(patch) {
-  const result = await send({ type: "set-config", config: patch });
-  if (result && result.error) showError(result.error);
-  else if (result && result.config) {
-    status = { ...(status || {}), config: result.config };
-    render();
+  try {
+    const result = await send({ type: "set-config", config: patch });
+    if (result && result.error) showError(result.error);
+    else if (result && result.config) els.captionsToggle.checked = result.config.captions !== false;
+  } catch (error) {
+    showError(String(error));
   }
 }
 
-els.toggleBtn.addEventListener("click", toggle);
 els.captionsToggle.addEventListener("change", () =>
   updateConfig({ captions: els.captionsToggle.checked })
 );
@@ -238,20 +137,10 @@ chrome.runtime.onMessage.addListener((message) => {
     appendLog(message.entry);
     return;
   }
-  if (message.type === "utterance" && message.row) {
-    els.lastUtterance.textContent = describeUtterance(message.row);
-    return;
-  }
   if (message.type !== "popup-event") return;
   const payload = message.payload || {};
   if (payload.type === "transcript-status") {
     els.transcriptStatus.textContent = payload.text || "";
-    return;
-  }
-  if (payload.type === "status") {
-    status = { ...(status || {}), server: payload };
-    render();
-    if (payload.state === "error" && payload.detail) showError(payload.detail);
   }
 });
 
@@ -272,10 +161,6 @@ els.clearLog.addEventListener("click", async () => {
   logEntries = [];
   renderLog();
   await send({ type: "clear-log" }).catch(() => {});
-});
-
-els.openTranscript.addEventListener("click", () => {
-  send({ type: "open-transcript" }).catch(() => {});
 });
 
 const UDEMY_URL = /^https:\/\/([a-z0-9-]+\.)*udemy\.com\//i;
@@ -322,16 +207,6 @@ els.clearTranscript.addEventListener("click", async () => {
   }
 });
 
-async function loadLastUtterance() {
-  try {
-    const response = await send({ type: "get-transcript" });
-    const rows = (response && response.rows) || [];
-    if (rows.length) els.lastUtterance.textContent = describeUtterance(rows[rows.length - 1]);
-  } catch {
-    /* ignore */
-  }
-}
-
 async function loadTranscriptState() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -347,9 +222,8 @@ async function loadTranscriptState() {
   }
 }
 
-refreshStatus();
 refreshHealth();
+loadConfig();
 loadTranscriptState();
 loadLog();
-loadLastUtterance();
 setInterval(refreshHealth, 4000);
