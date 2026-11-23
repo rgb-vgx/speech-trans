@@ -73,7 +73,7 @@ và wrapper `server/scripts/native_host.sh`. **Khởi động lại Chrome** sau
 
 1. `chrome://extensions` → **Developer mode** → **Load unpacked** → `extension/`.
 2. Extension ID cố định: `aolmedionghaakdlplcmabekkpbaiedc` (nhờ `key` trong manifest).
-3. Mở bài giảng Udemy (kể cả subdomain Udemy Business như `congty.udemy.com`).
+3. Mở bài giảng Udemy
 
 ## Sử dụng
 
