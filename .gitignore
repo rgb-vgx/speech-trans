@@ -15,3 +15,6 @@ logs/
 server/scripts/native_host.sh
 server/scripts/native_host.bat
 server/scripts/com.speechtrans.bridge.json
+
+# build output
+extension/dist/

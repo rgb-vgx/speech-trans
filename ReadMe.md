@@ -64,11 +64,12 @@ cd server && uv run python scripts/install_native_host.py
 
 ### 3. Extension
 
-Chrome/Edge: `chrome://extensions` / `edge://extensions` → **Developer mode** → **Load unpacked** → `extension/`.
+Chrome/Edge: `chrome://extensions` / `edge://extensions` → **Developer mode** → **Load unpacked** → `extension/` (manifest MV3 dùng service worker; file `manifest.firefox.json` chỉ dùng khi build cho Firefox).
 Extension ID cố định: `aolmedionghaakdlplcmabekkpbaiedc` (nhờ `key` trong manifest).
 
-Firefox: `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → chọn
-`extension/manifest.json`. Sau đó vào `about:addons` → SpeechTrans → **Permissions**,
+Firefox: chạy `./extension/build.sh` để tạo `extension/dist/firefox/` (manifest dùng
+`background.scripts`), rồi `about:debugging#/runtime/this-firefox` → **Load Temporary
+Add-on…** → chọn `extension/dist/firefox/manifest.json`. Sau đó vào `about:addons` → SpeechTrans → **Permissions**,
 bật quyền cho `127.0.0.1` nếu Firefox chưa cấp (MV3 coi host permission là opt-in).
 Temporary add-on biến mất khi khởi động lại Firefox — load lại, hoặc ký gói
 (unlisted trên addons.mozilla.org) nếu muốn cài cố định. Firefox cho phép extension
@@ -132,6 +133,7 @@ uv run pytest -q
 | Firefox báo “chưa cấp quyền 127.0.0.1” | `about:addons` → SpeechTrans → Permissions → bật quyền cho `127.0.0.1` |
 | Popup báo “Server chưa chạy” | Chạy `uv run python -m app.main` |
 | Firefox mất extension sau khi restart | Temporary add-on chỉ sống trong phiên; load lại ở `about:debugging` hoặc ký gói để cài cố định |
+| Chrome báo `'background.scripts' requires manifest version of 2 or lower` | Đang load nhầm `manifest.firefox.json`. Chrome dùng `extension/` (hoặc `extension/dist/chrome/` sau `build.sh`) |
 | Popup báo “Server thiếu ST_LLM_API_KEY” | Điền key vào `server/.env` rồi restart server |
 | Transcript báo không thấy cue | Mở panel Transcript của Udemy rồi bấm **Nạp** |
 | Dịch lỗi 429/rate-limit | Giảm `ST_LLM_BATCH` (ví dụ 10); extension tự chia batch và thử lại |
