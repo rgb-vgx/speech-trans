@@ -1,9 +1,23 @@
 {
   "manifest_version": 3,
   "name": "SpeechTrans — Udemy VI",
-  "version": "0.2.0",
+  "version": "0.3.4",
   "description": "Dịch phụ đề bài giảng Udemy sang tiếng Việt (transcript + LLM), hiển thị phụ đề song ngữ EN/VI trên video.",
   "minimum_chrome_version": "116",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "speech-trans@local",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ]
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
+    }
+  },
   "permissions": [
     "storage",
     "tabs",
@@ -12,10 +26,15 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://*.udemy.com/*"
+    "https://*.udemy.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "background": {
     "service_worker": "src/background.js",
+    "scripts": [
+      "src/background.js"
+    ],
     "type": "module"
   },
   "action": {

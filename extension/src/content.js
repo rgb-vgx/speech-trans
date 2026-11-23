@@ -11,6 +11,11 @@
   let shadow = null;
   let els = null;
   let captionsEnabled = true;
+  let cueOffset = 0;
+  let captionBottom = 13;
+  let hideNative = false;
+  let hideEnglish = false;
+  let loadToken = 0;
 
   function buildHost() {
     if (host && host.isConnected) return;
@@ -105,7 +110,10 @@
     // Anchor the box to the BOTTOM edge of the video, 72 px up so it sits just
     // above the player's control bar — i.e. it looks embedded in the video.
     const boxHeight = els.wrap.offsetHeight || 110;
-    const bottomGap = Math.min(120, Math.max(56, rect.height * 0.09));
+    // captionBottom is a percentage of the video height measured from its
+    // bottom edge (popup → "Vị trí phụ đề"), clamped so the box stays on top.
+    const percent = Math.max(2, Math.min(50, captionBottom));
+    const bottomGap = Math.max(12, Math.min(rect.height * 0.6, (rect.height * percent) / 100));
     const top = rect.top + rect.height - bottomGap - boxHeight;
     els.wrap.style.position = "fixed";
     els.wrap.style.left = `${Math.max(8, rect.left + (rect.width - width) / 2)}px`;
@@ -125,6 +133,59 @@
     const clean = (text || "").trim();
     el.textContent = clean;
     el.style.display = clean ? "block" : "none";
+  }
+
+  function renderCurrentCue() {
+    if (!els) return;
+    const cue = transcript.cues[transcript.index];
+    if (!cue) return;
+    setLine(els.en, hideEnglish ? "" : cue.en);
+    setLine(els.vi, cue.vi);
+  }
+
+  // Hide Udemy's own captions while keeping the text tracks readable for the
+  // transcript extractor: CSS only, no track.mode changes.
+  const NATIVE_CAPTION_SELECTORS = [
+    ".vjs-text-track-display",
+    ".shaka-text-container",
+    '[data-purpose="captions-display"]',
+    '[data-purpose="captions-container"]',
+    '[data-purpose="captions-cue-display"]',
+    '[class*="captions-container"]',
+    '[class*="captions--container"]',
+    '[class*="captions-display"]',
+    '[class*="captions--display"]',
+    '[class*="captions-cue"]',
+    '[class*="captions--cue"]',
+    '[class*="caption-window"]',
+    '[class*="captions-window"]',
+    '[class*="subtitles-container"]',
+    '[class*="subtitles--container"]',
+    '[class*="subtitles-display"]',
+  ].join(",");
+
+  function applyNativeCaptionStyle() {
+    let style = document.getElementById("speech-trans-hide-native");
+    if (!hideNative) {
+      if (style) style.remove();
+      return;
+    }
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "speech-trans-hide-native";
+      style.textContent = [
+        "video::cue { visibility: hidden !important; opacity: 0 !important; }",
+        `${NATIVE_CAPTION_SELECTORS} { display: none !important; }`,
+      ].join("\n");
+      (document.head || document.documentElement).appendChild(style);
+      let matches = 0;
+      try {
+        matches = document.querySelectorAll(NATIVE_CAPTION_SELECTORS).length;
+      } catch {
+        /* ignore */
+      }
+      dbg({ step: "hide-native", matches });
+    }
   }
 
   function setStatus(state, detail) {
@@ -169,8 +230,19 @@
       });
       return true;
     }
-    if (message.type === "set-captions") {
-      captionsEnabled = message.captions !== false;
+    if (message.type === "set-captions" || message.type === "ui-config") {
+      if (typeof message.captions === "boolean") captionsEnabled = message.captions;
+      if (Number.isFinite(message.offset)) cueOffset = message.offset;
+      if (Number.isFinite(message.bottom)) captionBottom = message.bottom;
+      if (typeof message.hideNative === "boolean") {
+        hideNative = message.hideNative;
+        applyNativeCaptionStyle();
+      }
+      if (typeof message.hideEnglish === "boolean") {
+        hideEnglish = message.hideEnglish;
+        renderCurrentCue();
+      }
+      if (els) positionOverlay();
       if (!captionsEnabled && els) els.wrap.classList.remove("show");
       return false;
     }
@@ -186,7 +258,7 @@
   // ---------------------------------------------------------------------
   // Transcript mode: pre-translated cues shown against video.currentTime
   // ---------------------------------------------------------------------
-  const transcript = { cues: [], index: -1, enabled: false, timer: null };
+  const transcript = { cues: [], index: -1, enabled: false, loading: false, key: "", timer: null };
 
   function lessonKey() {
     return location.origin + location.pathname;
@@ -500,7 +572,24 @@
     return best;
   }
 
-  async function loadTranscript({ allowSeek = false, ignoreCache = false } = {}) {
+  async function loadTranscript(options = {}) {
+    if (transcript.loading) {
+      // A second auto-load (or the popup button) while the first run is still
+      // translating would pay for the same lesson twice.
+      transcriptStatus("Đang dịch transcript…", "info");
+      return;
+    }
+    const token = ++loadToken;
+    transcript.loading = true;
+    try {
+      await loadTranscriptInner(options, token);
+    } finally {
+      if (token === loadToken) transcript.loading = false;
+    }
+  }
+
+  async function loadTranscriptInner(options, token) {
+    const { allowSeek = false, ignoreCache = false } = options;
     buildHost(); // make the on-page status + captions visible from the first step
     if (transcript.enabled) {
       transcriptStatus(`Transcript: ${transcript.cues.length} câu`, "info");
@@ -511,7 +600,7 @@
     const cacheKey = `tr:${key}`;
     const cached = await chrome.storage.local.get(cacheKey);
     let cues =
-      (!ignoreCache && cached && cached[cacheKey] && cached[cacheKey].v === 2 && cached[cacheKey].cues) || [];
+      (!ignoreCache && cached && cached[cacheKey] && cached[cacheKey].v === 3 && cached[cacheKey].cues) || [];
 
     if (!cues.length) {
       transcriptStatus("Đang tìm transcript trên trang…");
@@ -606,18 +695,30 @@
       }
 
       dbg({ step: "translated", count: translations.length });
-      cues = raw.map((cue, index) => ({
-        start: cue.start,
-        end: index + 1 < raw.length ? raw[index + 1].start : cue.start + 4,
-        en: cue.text,
-        vi: translations[index] || "",
-      }));
-      await chrome.storage.local.set({ [cacheKey]: { cues, at: Date.now(), v: 2 } });
+      cues = raw.map((cue, index) => {
+        const start = cue.start;
+        const hasEnd = Number.isFinite(cue.end) && cue.end > start;
+        const end = hasEnd
+          ? cue.end
+          : index + 1 < raw.length
+            ? raw[index + 1].start
+            : start + 4;
+        return { start, end, en: cue.text, vi: translations[index] || "" };
+      });
+      await chrome.storage.local.set({ [cacheKey]: { cues, at: Date.now(), v: 3 } });
       dbg({ step: "cached", cues: cues.length, first: cues[0] && cues[0].vi });
+    }
+
+    if (token !== loadToken) {
+      // The lesson changed while this transcript was translating: keep the
+      // cached result but never show the old lesson's cues on the new video.
+      dbg({ step: "load-abandoned", href: location.href });
+      return;
     }
 
     transcript.cues = cues;
     transcript.index = -1;
+    transcript.key = key;
     transcript.enabled = true;
     buildHost();
     dbg({ step: "enable", cues: cues.length, hasEls: Boolean(els) });
@@ -639,6 +740,7 @@
     transcript.enabled = false;
     transcript.cues = [];
     transcript.index = -1;
+    transcript.key = "";
     if (transcript.timer) clearInterval(transcript.timer);
     transcript.timer = null;
     if (els) els.wrap.classList.remove("show");
@@ -671,14 +773,26 @@
       const rect = video.getBoundingClientRect();
       dbg({ step: "sync", time: video.currentTime, rect: [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)], cues: transcript.cues.length });
     }
-    let index = cueIndexAt(video.currentTime);
-    if (index < 0 && transcript.cues.length) index = 0; // before the first cue
+    let index = cueIndexAt(video.currentTime + cueOffset);
     if (index < 0) {
+      // Before the first cue (or after the last one): show nothing.
       els.wrap.classList.remove("show");
       transcript.index = -1;
       return;
     }
     const cue = transcript.cues[index];
+    const cueEnd = Number.isFinite(cue.end) ? cue.end : cue.start + 4;
+    if (video.currentTime + cueOffset > cueEnd + 0.25) {
+      // Inside a gap between cues: do not keep the previous line on screen.
+      els.wrap.classList.remove("show");
+      transcript.index = -1;
+      return;
+    }
+    if (!captionsEnabled) {
+      // The toggle must win over the 250 ms sync loop.
+      els.wrap.classList.remove("show");
+      return;
+    }
     // Transcript mode keeps the captions visible while a cue is active: no
     // auto-hide, and re-show on every tick (video may be paused).
     positionOverlay();
@@ -686,7 +800,20 @@
     els.wrap.classList.add("show");
     if (index === transcript.index) return;
     transcript.index = index;
-    setLine(els.en, cue.en);
+    if (syncTranscript.cueLogs === undefined) syncTranscript.cueLogs = 0;
+    if (syncTranscript.cueLogs < 200) {
+      syncTranscript.cueLogs += 1;
+      dbg({
+        step: "cue",
+        i: index,
+        t: Number(video.currentTime.toFixed(2)),
+        offset: cueOffset,
+        start: Number(cue.start.toFixed(2)),
+        end: Number(cueEnd.toFixed(2)),
+        en: (cue.en || "").slice(0, 50),
+      });
+    }
+    setLine(els.en, hideEnglish ? "" : cue.en);
     setLine(els.vi, cue.vi);
     if (!syncTranscript.reported) {
       syncTranscript.reported = true;
@@ -733,7 +860,7 @@
         const key = `tr:${lessonKey()}`;
         const cached = await chrome.storage.local.get(key);
         dbg({ step: "cache", key, hit: Boolean(cached && cached[key]), url: location.href });
-        if (cached && cached[key] && cached[key].v === 2 && cached[key].cues && cached[key].cues.length) {
+        if (cached && cached[key] && cached[key].v === 3 && cached[key].cues && cached[key].cues.length) {
           const list = cached[key].cues;
           const englishLike = list.filter((c) => c.vi && c.en && c.vi.trim() === c.en.trim()).length;
           const badCache = englishLike > Math.max(3, list.length * 0.25);
@@ -777,6 +904,25 @@
     }, 1000);
   }
 
+  // Udemy switches lectures without reloading the page: this content script
+  // stays alive, so cues from the previous lesson must be dropped and the new
+  // lesson loaded — otherwise subtitles run on the wrong timeline.
+  let watchedKey = lessonKey();
+  setInterval(() => {
+    const key = lessonKey();
+    if (key === watchedKey) return;
+    watchedKey = key;
+    dbg({ step: "lesson-change", key });
+    if (transcript.enabled || transcript.loading) clearTranscript();
+    loadToken += 1;
+    transcript.loading = false;
+    setTimeout(() => {
+      loadTranscript({ allowSeek: false }).catch((error) =>
+        transcriptStatus(String(error && error.message ? error.message : error), "error")
+      );
+    }, 1500);
+  }, 1000);
+
   dbg({ step: "content-ready", href: location.href });
   if (document.readyState === "complete") autoLoadTranscript();
   else window.addEventListener("load", autoLoadTranscript);
@@ -784,7 +930,14 @@
   chrome.runtime
     .sendMessage({ from: "content", type: "get-config" })
     .then((config) => {
-      if (config && typeof config.captions === "boolean") captionsEnabled = config.captions;
+      if (!config) return;
+      if (typeof config.captions === "boolean") captionsEnabled = config.captions;
+      if (Number.isFinite(config.cueOffset)) cueOffset = config.cueOffset;
+      if (Number.isFinite(config.captionBottom)) captionBottom = config.captionBottom;
+      if (typeof config.hideNative === "boolean") hideNative = config.hideNative;
+      if (typeof config.hideEnglish === "boolean") hideEnglish = config.hideEnglish;
+      applyNativeCaptionStyle();
+      renderCurrentCue();
     })
     .catch(() => {});
 })();

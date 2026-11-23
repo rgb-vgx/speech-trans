@@ -5,6 +5,11 @@ const els = {
   serverDot: $("serverDot"),
   serverText: $("serverText"),
   captionsToggle: $("captionsToggle"),
+  hideNativeToggle: $("hideNativeToggle"),
+  hideEnglishToggle: $("hideEnglishToggle"),
+  bottomInput: $("bottomInput"),
+  bottomLabel: $("bottomLabel"),
+  offsetInput: $("offsetInput"),
   hint: $("hint"),
   logText: $("logText"),
   logCount: $("logCount"),
@@ -17,6 +22,8 @@ const els = {
 
 let logEntries = [];
 
+const IS_FIREFOX = chrome.runtime.getURL("").startsWith("moz-extension://");
+
 function send(message) {
   return chrome.runtime.sendMessage({ from: "popup", ...message });
 }
@@ -26,10 +33,6 @@ function fmtTime(ms) {
   return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
-function esc(value) {
-  return String(value).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-}
-
 function renderLog() {
   if (!els.logText) return;
   if (!logEntries.length) {
@@ -37,14 +40,16 @@ function renderLog() {
     els.logCount.textContent = "";
     return;
   }
-  els.logText.innerHTML = logEntries
-    .map((entry) => {
-      const time = fmtTime(entry.t);
-      const extra = entry.extra ? " " + esc(JSON.stringify(entry.extra)) : "";
-      const cls = entry.scope === "error" ? ' class="err"' : "";
-      return `<span${cls}>${time} [${esc(entry.scope)}] ${esc(entry.message)}${extra}</span>`;
-    })
-    .join("\n");
+  const fragment = document.createDocumentFragment();
+  for (const entry of logEntries) {
+    const span = document.createElement("span");
+    if (entry.scope === "error") span.className = "err";
+    const extra = entry.extra ? " " + JSON.stringify(entry.extra) : "";
+    span.textContent = `${fmtTime(entry.t)} [${entry.scope}] ${entry.message}${extra}\n`;
+    fragment.appendChild(span);
+  }
+  els.logText.textContent = "";
+  els.logText.appendChild(fragment);
   els.logCount.textContent = `(${logEntries.length})`;
   els.logText.scrollTop = els.logText.scrollHeight;
 }
@@ -89,11 +94,19 @@ async function refreshHealth() {
   try {
     info = await send({ type: "server-info", force: true });
   } catch (error) {
-    setServer("err", "Bridge chưa cài (chạy scripts/install_native_host.py)");
+    setServer(
+      "err",
+      IS_FIREFOX
+        ? "Không gọi được server — cấp quyền 127.0.0.1 trong about:addons → Permissions"
+        : "Bridge chưa cài (chạy scripts/install_native_host.py)"
+    );
     return;
   }
   if (!info || info.error) {
-    setServer("err", "Server chưa chạy (localhost:8787)");
+    setServer(
+      "err",
+      IS_FIREFOX ? "Server chưa chạy hoặc chưa cấp quyền 127.0.0.1" : "Server chưa chạy (localhost:8787)"
+    );
     return;
   }
   const health = info.health || {};
@@ -111,17 +124,35 @@ async function refreshHealth() {
 async function loadConfig() {
   try {
     const config = await send({ type: "get-config" });
-    if (config && typeof config.captions === "boolean") els.captionsToggle.checked = config.captions;
+    if (!config) return;
+    if (typeof config.captions === "boolean") els.captionsToggle.checked = config.captions;
+    if (typeof config.hideNative === "boolean") els.hideNativeToggle.checked = config.hideNative;
+    if (typeof config.hideEnglish === "boolean") els.hideEnglishToggle.checked = config.hideEnglish;
+    if (Number.isFinite(config.cueOffset)) els.offsetInput.value = String(config.cueOffset);
+    if (Number.isFinite(config.captionBottom)) applyBottom(config.captionBottom);
   } catch {
     /* ignore */
   }
+}
+
+function applyBottom(value) {
+  const number = Math.max(2, Math.min(50, Math.round(Number(value) || 13)));
+  els.bottomInput.value = String(number);
+  els.bottomLabel.textContent = `Cách đáy video ${number}%`;
+  return number;
 }
 
 async function updateConfig(patch) {
   try {
     const result = await send({ type: "set-config", config: patch });
     if (result && result.error) showError(result.error);
-    else if (result && result.config) els.captionsToggle.checked = result.config.captions !== false;
+    else if (result && result.config) {
+      if (typeof result.config.captions === "boolean") els.captionsToggle.checked = result.config.captions;
+      if (typeof result.config.hideNative === "boolean") els.hideNativeToggle.checked = result.config.hideNative;
+      if (typeof result.config.hideEnglish === "boolean") els.hideEnglishToggle.checked = result.config.hideEnglish;
+      if (Number.isFinite(result.config.cueOffset)) els.offsetInput.value = String(result.config.cueOffset);
+      if (Number.isFinite(result.config.captionBottom)) applyBottom(result.config.captionBottom);
+    }
   } catch (error) {
     showError(String(error));
   }
@@ -130,6 +161,26 @@ async function updateConfig(patch) {
 els.captionsToggle.addEventListener("change", () =>
   updateConfig({ captions: els.captionsToggle.checked })
 );
+
+els.hideNativeToggle.addEventListener("change", () =>
+  updateConfig({ hideNative: els.hideNativeToggle.checked })
+);
+
+els.hideEnglishToggle.addEventListener("change", () =>
+  updateConfig({ hideEnglish: els.hideEnglishToggle.checked })
+);
+
+els.bottomInput.addEventListener("input", () => applyBottom(els.bottomInput.value));
+els.bottomInput.addEventListener("change", () =>
+  updateConfig({ captionBottom: applyBottom(els.bottomInput.value) })
+);
+
+els.offsetInput.addEventListener("change", () => {
+  const value = Math.max(-15, Math.min(15, Number(els.offsetInput.value) || 0));
+  const rounded = Math.round(value * 4) / 4;
+  els.offsetInput.value = String(rounded);
+  updateConfig({ cueOffset: rounded });
+});
 
 chrome.runtime.onMessage.addListener((message) => {
   if (!message) return;

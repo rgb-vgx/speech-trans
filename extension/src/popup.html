@@ -64,6 +64,11 @@
       }
       .switch input:checked + .slider { background: var(--accent); }
       .switch input:checked + .slider::before { transform: translateX(16px); background: #fff; }
+      .offset {
+        width: 76px; background: #0f141c; color: var(--text); border: 1px solid var(--line);
+        border-radius: 8px; padding: 6px 8px; font: inherit; text-align: center;
+      }
+      .range { width: 112px; accent-color: var(--accent); }
       .hint { padding: 4px 16px 14px; font-size: 11px; color: var(--muted); }
       .hint.error { color: #ff9aa5; }
       .mini {
@@ -111,6 +116,44 @@
           <input type="checkbox" id="captionsToggle" checked />
           <span class="slider"></span>
         </label>
+      </div>
+
+      <div class="row">
+        <div class="label">
+          <span>Ẩn phụ đề gốc</span>
+          <span>Chỉ hiện bản dịch của SpeechTrans</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="hideNativeToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <div class="label">
+          <span>Ẩn dòng EN</span>
+          <span>Chỉ hiện bản dịch tiếng Việt</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="hideEnglishToggle" />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="row">
+        <div class="label">
+          <span>Canh thời gian</span>
+          <span>Dương = phụ đề hiện sớm hơn (giây)</span>
+        </div>
+        <input class="offset" type="number" id="offsetInput" value="0" min="-15" max="15" step="0.25" />
+      </div>
+
+      <div class="row">
+        <div class="label">
+          <span>Vị trí phụ đề</span>
+          <span id="bottomLabel">Cách đáy video 13%</span>
+        </div>
+        <input class="range" type="range" id="bottomInput" min="2" max="50" step="1" value="13" />
       </div>
 
       <div class="row">

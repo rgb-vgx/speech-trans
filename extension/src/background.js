@@ -6,6 +6,37 @@
 
 const NATIVE_HOST = "com.speechtrans.bridge";
 const INFO_TTL_MS = 5000;
+const SERVER_BASE = "http://127.0.0.1:8787";
+// Chrome/Edge block extension pages from fetching loopback URLs, so they go
+// through the native-messaging bridge. Firefox allows a direct fetch when the
+// manifest has the host permission — no extra installer needed.
+const IS_FIREFOX = chrome.runtime.getURL("").startsWith("moz-extension://");
+
+async function serverRequest(path, { method = "GET", body = null, timeout = 180 } = {}) {
+  if (!IS_FIREFOX) {
+    const message = { type: "http", method, path, timeout };
+    if (body !== null) message.body = body;
+    const response = await chrome.runtime.sendNativeMessage(NATIVE_HOST, message);
+    if (!response) return { status: 0, error: "bridge không phản hồi" };
+    return response;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout * 1000);
+  try {
+    const response = await fetch(`${SERVER_BASE}${path}`, {
+      method,
+      headers: body !== null ? { "Content-Type": "application/json" } : undefined,
+      body: body !== null ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => null);
+    return { status: response.status, body: payload };
+  } catch (error) {
+    return { status: 0, error: String(error && error.message ? error.message : error) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // --- debug log ---------------------------------------------------------
 const LOG_LIMIT = 200;
@@ -31,21 +62,65 @@ async function restoreLog() {
 
 // --- settings ----------------------------------------------------------
 let captions = true;
+let cueOffset = 0;
+let captionBottom = 13;
+let hideNative = false;
+let hideEnglish = false;
 
 async function restoreSettings() {
-  const stored = await chrome.storage.local.get("captions");
+  const stored = await chrome.storage.local.get([
+    "captions",
+    "cueOffset",
+    "captionBottom",
+    "hideNative",
+    "hideEnglish",
+  ]);
   if (typeof stored.captions === "boolean") captions = stored.captions;
+  if (Number.isFinite(stored.cueOffset)) cueOffset = clampOffset(stored.cueOffset);
+  if (Number.isFinite(stored.captionBottom)) captionBottom = clampBottom(stored.captionBottom);
+  if (typeof stored.hideNative === "boolean") hideNative = stored.hideNative;
+  if (typeof stored.hideEnglish === "boolean") hideEnglish = stored.hideEnglish;
 }
 
-async function setCaptions(value) {
-  captions = value !== false;
-  await chrome.storage.local.set({ captions });
+function clampOffset(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(-15, Math.min(15, Math.round(number * 4) / 4));
+}
+
+/** Percent of the video height, measured from the bottom edge. */
+function clampBottom(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 13;
+  return Math.max(2, Math.min(50, Math.round(number)));
+}
+
+async function broadcastConfig() {
   const tabs = await chrome.tabs.query({ url: "https://*.udemy.com/*" });
   for (const tab of tabs) {
     if (tab.id === undefined) continue;
-    chrome.tabs.sendMessage(tab.id, { type: "set-captions", captions }).catch(() => {});
+    chrome.tabs
+      .sendMessage(tab.id, {
+        type: "ui-config",
+        captions,
+        offset: cueOffset,
+        bottom: captionBottom,
+        hideNative,
+        hideEnglish,
+      })
+      .catch(() => {});
   }
-  return captions;
+}
+
+async function setConfig(patch) {
+  if (typeof patch.captions === "boolean") captions = patch.captions;
+  if (patch.cueOffset !== undefined) cueOffset = clampOffset(patch.cueOffset);
+  if (patch.captionBottom !== undefined) captionBottom = clampBottom(patch.captionBottom);
+  if (typeof patch.hideNative === "boolean") hideNative = patch.hideNative;
+  if (typeof patch.hideEnglish === "boolean") hideEnglish = patch.hideEnglish;
+  await chrome.storage.local.set({ captions, cueOffset, captionBottom, hideNative, hideEnglish });
+  await broadcastConfig();
+  return { captions, cueOffset, captionBottom, hideNative, hideEnglish };
 }
 
 // --- server health -----------------------------------------------------
@@ -56,9 +131,18 @@ async function getServerInfo(force = false) {
   if (infoCache.inflight) return infoCache.inflight;
   infoCache.inflight = (async () => {
     try {
-      const response = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: "info" });
-      infoCache = { at: Date.now(), value: response, inflight: null };
-      return response;
+      let value;
+      if (IS_FIREFOX) {
+        const response = await serverRequest("/health", { timeout: 5 });
+        value =
+          response.status === 200
+            ? { type: "info", health: response.body }
+            : { error: response.error || `HTTP ${response.status}` };
+      } else {
+        value = await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: "info" });
+      }
+      infoCache = { at: Date.now(), value, inflight: null };
+      return value;
     } catch (error) {
       const value = { error: String(error && error.message ? error.message : error) };
       infoCache = { at: Date.now(), value, inflight: null };
@@ -70,13 +154,7 @@ async function getServerInfo(force = false) {
 
 async function serverLog(event) {
   try {
-    await chrome.runtime.sendNativeMessage(NATIVE_HOST, {
-      type: "http",
-      method: "POST",
-      path: "/client-log",
-      body: { event },
-      timeout: 20,
-    });
+    await serverRequest("/client-log", { method: "POST", body: { event }, timeout: 20 });
   } catch {
     /* diagnostics only */
   }
@@ -88,10 +166,8 @@ function broadcastToPopup(payload) {
 
 async function translateCues(cues, lesson) {
   try {
-    const response = await chrome.runtime.sendNativeMessage(NATIVE_HOST, {
-      type: "http",
+    const response = await serverRequest("/translate-cues", {
       method: "POST",
-      path: "/translate-cues",
       body: { cues, lesson: lesson || null },
       timeout: 300,
     });
@@ -201,10 +277,10 @@ async function handleMessage(message, sender) {
     }
 
     case "get-config":
-      return { captions };
+      return { captions, cueOffset, captionBottom, hideNative, hideEnglish };
 
     case "set-config":
-      return { config: { captions: await setCaptions((message.config || {}).captions) } };
+      return { config: await setConfig(message.config || {}) };
 
     case "get-log":
       return { entries: logs.slice(-LOG_LIMIT) };

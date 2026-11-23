@@ -74,13 +74,28 @@ coi là cache hỏng và dịch lại.
 - Neo vào đáy thẻ `<video>` (cách mép dưới ~56–120 px), cập nhật mỗi 500 ms và khi
   scroll/resize/fullscreen.
 - `syncTranscript()` chạy mỗi 250 ms: binary search cue theo `video.currentTime`, hiện
-  dòng EN (nhỏ) + VI (lớn); cue đang active luôn hiện, không tự ẩn.
+  dòng EN (nhỏ) + VI (lớn); cue đang active luôn hiện, không tự ẩn. `cue.end` của VTT
+  được tôn trọng: hết cue (khoảng lặng) thì ẩn thay vì giữ câu cũ.
+- Popup có ô **Canh thời gian** (`cueOffset`, −15…+15 s, bước 0,25 s): dương = hiện sớm
+  hơn; lưu trong `storage.local` và gửi xuống content script qua message `ui-config`.
+- Popup cũng có thanh **Vị trí phụ đề** (`captionBottom`, 2–50% chiều cao video tính từ
+  đáy): `positionOverlay()` dùng giá trị này thay cho khoảng cách cố định, nên kéo lên/xuống
+  áp dụng ngay cả trong fullscreen.
+- **Ẩn phụ đề gốc** (`hideNative`): chèn `<style>` vào trang với `video::cue { visibility:
+  hidden }` và `display:none` cho các container caption quen thuộc (`.vjs-text-track-display`,
+  `.shaka-text-container`, `[class*="captions-container"]`…). Chỉ ẩn bằng CSS, không đổi
+  `textTracks[].mode`, nên bước lấy cue từ text track vẫn hoạt động.
+- **Ẩn dòng EN** (`hideEnglish`): overlay vẫn có 2 dòng nhưng dòng EN rỗng, chỉ hiện VI;
+  áp dụng ngay cho cue đang hiển thị qua `renderCurrentCue()`.
+- Udemy là SPA: khi chuyển bài, content script sống tiếp. Bộ theo dõi `lessonKey()`
+  (mỗi 1 s) phát hiện URL đổi, huỷ lần nạp cũ (`loadToken`), xoá cue cũ và nạp bài mới —
+  nhờ vậy phụ đề không chạy trên timeline của bài trước.
 - Khi fullscreen, host được chuyển vào `document.fullscreenElement` (trừ khi đó là thẻ
   `<video>` — Chrome không render con của video).
 
 ## 6. Vì sao phải có native bridge
 
-Chrome 138+ áp dụng *Local Network Access*: extension page/service worker gọi
+Chrome/Edge 138+ áp dụng *Local Network Access*: extension page/service worker gọi
 `http://127.0.0.1:8787` sẽ treo, dù có `host_permissions` và preflight đúng. Vì vậy
 extension dùng `chrome.runtime.sendNativeMessage`; Chrome spawn `native_host.bat`/`.sh`
 và nói chuyện bằng framing native messaging:
@@ -88,6 +103,11 @@ và nói chuyện bằng framing native messaging:
 ```
 4-byte little-endian length | JSON UTF-8
 ```
+
+Firefox không có ràng buộc này: `background.js` gọi thẳng
+`http://127.0.0.1:8787` bằng `fetch` (cần host permission `http://127.0.0.1/*`,
+Firefox MV3 cấp theo kiểu opt-in trong `about:addons`). Vì vậy Firefox không cần cài
+native host, còn Chrome/Edge thì bắt buộc.
 
 Các message:
 
@@ -105,6 +125,8 @@ phát triển.
 
 - **background.js**: cache `/health` 5 s, gom request dịch, log debug vào
   `chrome.storage.session`, giữ setting `captions`. Không giữ state capture.
+  Một file chạy được cả hai: Chrome/Edge dùng `background.service_worker`, Firefox dùng
+  `background.scripts` (event page); listener đăng ký ở top-level và state nằm trong storage.
 - **content.js**: lấy cue, gọi dịch, vẽ overlay, theo dõi `currentTime`, cache theo bài.
 - **popup**: trạng thái server, toggle phụ đề, Nạp/Tắt transcript, nhật ký debug.
 - Không dùng `tabCapture`, `offscreen`, WebSocket hay audio playback.

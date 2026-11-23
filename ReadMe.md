@@ -49,7 +49,7 @@ uv run python -m app.main
 `/health` trả `{"status":"ok","mode":"transcript","llm_translate":true,...}`.
 Không cần chờ nạp model — server sẵn sàng sau ~1 giây.
 
-### 2. Native messaging bridge
+### 2. Native messaging bridge (Chrome/Edge)
 
 ```bash
 cd server && uv run python scripts/install_native_host.py
@@ -60,12 +60,21 @@ cd server && uv run python scripts/install_native_host.py
 - Windows: ghi `server/scripts/native_host.bat` + `com.speechtrans.bridge.json` và
   đăng ký `HKCU\Software\{Google\Chrome,Chrome Beta,Chromium,Microsoft\Edge}\NativeMessagingHosts\com.speechtrans.bridge`.
 - Gỡ: thêm `--uninstall`. **Khởi động lại trình duyệt** sau khi cài.
+- **Firefox không cần bước này** (xem dưới).
 
 ### 3. Extension
 
-1. `chrome://extensions` (hoặc `edge://extensions`) → **Developer mode** → **Load unpacked** → `extension/`.
-2. Extension ID cố định: `aolmedionghaakdlplcmabekkpbaiedc` (nhờ `key` trong manifest).
-3. Mở bài giảng Udemy.
+Chrome/Edge: `chrome://extensions` / `edge://extensions` → **Developer mode** → **Load unpacked** → `extension/`.
+Extension ID cố định: `aolmedionghaakdlplcmabekkpbaiedc` (nhờ `key` trong manifest).
+
+Firefox: `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → chọn
+`extension/manifest.json`. Sau đó vào `about:addons` → SpeechTrans → **Permissions**,
+bật quyền cho `127.0.0.1` nếu Firefox chưa cấp (MV3 coi host permission là opt-in).
+Temporary add-on biến mất khi khởi động lại Firefox — load lại, hoặc ký gói
+(unlisted trên addons.mozilla.org) nếu muốn cài cố định. Firefox cho phép extension
+gọi localhost trực tiếp nên không cần bridge.
+
+Mở bài giảng Udemy sau khi cài.
 
 ## Sử dụng
 
@@ -75,7 +84,15 @@ cd server && uv run python scripts/install_native_host.py
 2. Lần đầu mỗi bài: dịch cả bài qua LLM (~1 phút với bài 100–200 câu). Các lần sau lấy
    từ cache (`chrome.storage.local`, khoá theo URL bài giảng).
 3. Phụ đề EN (nhỏ) + VI (lớn) neo ở đáy video. Popup cho **Nạp** lại, **Tắt** phụ đề,
-   bật/tắt hiển thị và xem nhật ký debug.
+   bật/tắt hiển thị, canh thời gian và xem nhật ký debug.
+4. Nếu phụ đề lệch so với tiếng (một số bài có intro/offset riêng), chỉnh ô **Canh thời
+   gian** trong popup: số dương = hiện sớm hơn, số âm = hiện trễ hơn, bước 0,25 s; giá trị
+   được lưu lại và áp dụng ngay.
+5. Muốn dời phụ đề lên/xuống, kéo thanh **Vị trí phụ đề** (2–50% chiều cao video, tính từ
+   đáy); thay đổi áp dụng ngay và được lưu lại.
+6. Bật **Ẩn phụ đề gốc** để tắt phụ đề tiếng Anh của Udemy, chỉ còn EN/VI của SpeechTrans.
+   Extension ẩn bằng CSS (`video::cue` + container caption) nên vẫn đọc được caption để
+   dịch. Muốn chỉ hiện tiếng Việt thì bật thêm **Ẩn dòng EN**.
 
 ## Cấu hình (`server/.env`, xem `.env.example`)
 
@@ -111,8 +128,10 @@ uv run pytest -q
 
 | Hiện tượng | Xử lý |
 |---|---|
-| Popup báo “Bridge chưa cài” | Chạy `install_native_host.py` rồi khởi động lại trình duyệt |
+| Popup báo “Bridge chưa cài” (Chrome/Edge) | Chạy `install_native_host.py` rồi khởi động lại trình duyệt |
+| Firefox báo “chưa cấp quyền 127.0.0.1” | `about:addons` → SpeechTrans → Permissions → bật quyền cho `127.0.0.1` |
 | Popup báo “Server chưa chạy” | Chạy `uv run python -m app.main` |
+| Firefox mất extension sau khi restart | Temporary add-on chỉ sống trong phiên; load lại ở `about:debugging` hoặc ký gói để cài cố định |
 | Popup báo “Server thiếu ST_LLM_API_KEY” | Điền key vào `server/.env` rồi restart server |
 | Transcript báo không thấy cue | Mở panel Transcript của Udemy rồi bấm **Nạp** |
 | Dịch lỗi 429/rate-limit | Giảm `ST_LLM_BATCH` (ví dụ 10); extension tự chia batch và thử lại |
